@@ -44,8 +44,9 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - 三级信任策略：`auto` / `review` / `blocked`；`review` 级别直接批准需显式 `--force`，敏感条目禁止批准
 - 时效裁决：`valid_until` 已过期的条目默认不出现在 `list` / `search` 里（`--include-expired` 打开）
 - 读不了的 `.md` 不会被静默跳过：`list` / `search` 告警，`stats` 计数，`doctor` 判 FAIL
-- CLI：`init` `doctor` `new` `list` `show` `search` `approve` `reject` `stats`
-- 45 个单元测试（含 15 个 CLI 端到端用例），全部通过
+- **采集**：`scan` 从 WorkBuddy（`~/.workbuddy/memory/`）读入待审条目，按内容指纹去重、可 `--dry-run`
+- CLI：`init` `doctor` `new` `scan` `list` `show` `search` `approve` `reject` `stats`
+- 62 个单元测试（含 19 个 CLI 端到端用例），全部通过
 
 > **依赖**：只有 `pyyaml`。阶段 1 曾零依赖，P2-01 为支持完整 YAML 引入（理由见 ADR-005）。
 
@@ -105,7 +106,7 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 |---|---|---|
 | 1 | 记忆模型、存储层、原子写入、CLI、测试 | 骨架完成 |
 | 1.5 | 加固：id 碰撞、读不出即报错、门禁分级、过期过滤 | 完成（ADR-009） |
-| 2 | 采集适配器（Codex / Claude Code / Trae / WorkBuddy）、文件监控、哈希去重、SQLite FTS5 索引（trigram） | **P2-01 完成**（真 YAML），其余未开始 |
+| 2 | 采集适配器（WorkBuddy 已通；Codex / Claude Code / Trae 待做）、文件监控、哈希去重、SQLite FTS5 索引（trigram） | **P2-01 / P2-03 / P2-03a 完成**，其余未开始 |
 | 3 | AI 整理（仅产出提案）、冲突检测、Pydantic 校验 | 未开始 |
 | 4 | 审核流 + 差异预览（CLI） | 未开始 |
 | 5 | MCP stdio（只读 + propose）、Git 自动备份 | 未开始 |

@@ -1,6 +1,6 @@
 # HANDOFF · 项目交接
 
-> 最后更新：2026-11-24 14:52 ｜ 当前阶段：**阶段 1 + 1.5 完成，P2-01 完成，阶段 2 其余未开始**
+> 最后更新：2026-11-24 14:56 ｜ 当前阶段：**阶段 1 + 1.5 + P2-01 + P2-03/03a 完成，阶段 2 其余未开始**
 
 任何接手的 AI Agent：**先读 `AGENTS.md`（工程契约），再读本文件（现状），最后读 `docs/02-roadmap.md` 领工单。** 不要跳过前三者直接改代码。
 
@@ -8,7 +8,7 @@
 
 ## 1. 一句话现状
 
-阶段 1 核心数据层已跑通：记忆可以创建、落盘、审批、检索、归档，有原子写入和文件锁保护，**45 个单元测试全绿**。阶段 1.5 的加固把三处会静默丢数据/失联的路径堵掉了（见 ADR-009）；P2-01 把 frontmatter 换成真 YAML，**手改文件不再读不出来**（ADR-005 部分取代）。上游来源的路径与格式已实测核实（[`docs/04-upstream-formats.md`](docs/04-upstream-formats.md)）。**采集适配器、AI 整理、MCP、备份命令都还没有。**
+**第一个真实来源已经打通**：`memoryhub scan` 能把 WorkBuddy 的用户记忆读成 `inbox/pending` 条目，重复扫描不产生重复条目，审核后进 `vault/` 可被 `search` 找到。**62 个单元测试全绿**。frontmatter 已换真 YAML（P2-01），手改文件不再读不出来。阶段 1.5 堵掉了三处静默丢数据的路径（ADR-009）。上游格式基线已实测核实（[`docs/04-upstream-formats.md`](docs/04-upstream-formats.md)）。**Codex / Claude 适配器、监控、索引、AI 整理、MCP、备份都还没有。**
 
 ## 2. 仓库信息
 
@@ -17,7 +17,7 @@
 | 本地路径 | `D:/project/MemoryHub` |
 | 远端 | `origin → https://github.com/iCurrer/MemoryHub.git`（**公开仓**） |
 | 分支 | `main` |
-| 提交 | 骨架 2 个 + 加固 1 个 + 上游基线 1 个 + P2-01 1 个 |
+| 提交 | 骨架 2 个 + 加固 1 个 + 上游基线 1 个 + P2-01 1 个 + 采集 1 个 |
 | 数据目录 | `D:/my-memory`（**尚未创建**，需 `memoryhub init` 生成） |
 | 运行时依赖 | **`pyyaml>=6.0`**（第一个，也是目前唯一一个） |
 
@@ -25,18 +25,22 @@
 
 | 文件 | 职责 | 稳定性 |
 |---|---|---|
-| `src/memoryhub/models.py` | `MemoryEntry` 领域模型、三级信任推导、校验、`is_expired`、Markdown 序列化 | 稳定，字段已冻结（`project` 分类的信任归属待拍板，见 ADR-010） |
+| `src/memoryhub/models.py` | `MemoryEntry` 领域模型、三级信任推导、校验、`is_expired`、`precedence`/`layer`、Markdown 序列化 | 稳定，字段已冻结（`project` 分类的信任归属待拍板，见 ADR-010） |
 | `src/memoryhub/frontmatter.py` | PyYAML 解析/序列化：嵌套、多行、块列表、BOM、重复键拒绝 | **稳定**（P2-01 完成） |
+| `src/memoryhub/adapters/base.py` | `Adapter` 协议、`SourcePath`（带 `precedence`/`layer`）、markdown 切分 helper | 稳定（P2-03） |
+| `src/memoryhub/adapters/workbuddy.py` | 首个真实适配器：`~/.workbuddy/memory/*_memory.md` | 稳定（P2-03a），格式依据见 docs/04 |
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
 | `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析 | 稳定（注意：`save()` 会整份重写，加配置项前先改成合并写入） |
-| `src/memoryhub/cli.py` | 9 个命令 | 稳定，命令会继续增加 |
+| `src/memoryhub/cli.py` | 10 个命令 | 稳定，命令会继续增加 |
 | `tests/test_store.py` | 30 个用例 | 会随功能增长 |
-| `tests/test_cli.py` | 15 个端到端用例 | 覆盖 `--vault` 三写法、`--approve` 分级、错误路径 |
+| `tests/test_cli.py` | 19 个端到端用例 | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
+| `tests/test_adapters.py` | 13 个用例 | 协议三条判据 + WorkBuddy 解析 |
 
-可用命令：`init` `doctor` `new` `list` `show` `search` `approve` `reject` `stats`
+可用命令：`init` `doctor` `new` `scan` `list` `show` `search` `approve` `reject` `stats`
 
 本轮新增的行为（都带测试）：
 
+- **`scan`**：从已注册的 adapter 采集到 `inbox/pending`，按 `(adapter, source_path, body)` 指纹去重，可 `--dry-run`；adapter 恒为只读
 - `new` 走 `store.create()`：id 被占用时**报错而不是覆盖**
 - `new --approve` 遇到 `trust=review` 会拒绝，需 `--force` 才越过；`blocked` 无论如何不可越过
 - `list` / `search` 默认隐藏 `valid_until` 已过期的条目，`--include-expired` 打开；
@@ -52,10 +56,11 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 45 passed
+python -m unittest discover -s tests -v          # 期望 62 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 7 个目录
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
+python -m memoryhub scan --vault /tmp/v --dry-run # 期望列出发现的来源与将导入条数
 ```
 
 注意：`doctor` 在**未 init 的仓上应返回 1**（vault 与 layout 缺失是 FAIL），这是正确行为。
@@ -63,11 +68,11 @@ python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 
 
 ## 5. 未实现（不要以为已有）
 
-- 采集：无任何 adapter，`sources/` 目录是空的
-- 监控：无 Watchdog，改动来源文件不会被发现
+- 采集：**只有 WorkBuddy 一个**（`auto_memory` 类）。Codex（指令链 + sqlite + zstd）、Claude Code（CLAUDE.md + `memory/`）、Cursor（`.mdc`）、Trae（`user_profile` / `project_memory` / `session_memory`）都还没有
+- 监控：无 Watchdog，改动来源文件不会被发现，`scan` 要手动跑
 - 索引：无 SQLite，`search` 是遍历目录（400 条约 114ms，可接受）
-- AI：无 Provider，无去重/冲突检测
-- MCP：无 server
+- AI：无 Provider，无去重/冲突检测；`scan` 只做规则级切分，**语义去重与冲突一律没有**
+- MCP：无 server —— **这意味着别的 AI 现在还读不到中央库**（见第 8 节）
 - 备份：无 `backup` 命令，Git 需手工执行
 
 ## 6. 已知问题（按优先级）
@@ -95,18 +100,23 @@ python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 
 
 还有一条**未决**：`project` 分类在 ADR-003 的信任表里没有归属，当前落 `auto`。这是代码替人做的决定，见 ADR-010，需要所有者二选一。
 
-以及 ADR-011（三条一起拍）：`source_kind` 扩展、`precedence`/`layer` 字段、"Markdown 只是输出侧的真相源"。**P2-03 开工前必须定。**
+ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdown 只是输出侧真相源"），实现见 `adapters/base.py`。
 
 ## 8. 下一步
 
-**P2-01 已完成。** 现在有两条路，按依赖关系排序：
+**闭环已通，但还缺"出口"。** 现在记忆能进来、能审、能查，但**只有 CLI 能查** —— 别的 AI 工具一个都读不到。按价值排序：
 
-1. **P2-02（SQLite/FTS5 索引）** —— **不依赖任何待决事项，可以立刻开工**。`search` 目前是目录扫描：实测 400 条 warm 检索 114ms，可用但会随条目线性增长；中文也是子串匹配而非分词。
-2. **P2-03（Adapter 接口）** —— **卡 ADR-011**（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdown 只是输出真相源"）。不拍板就开，等于用错的形状设计接口，之后要改两次。
+1. **P5-01 最小 MCP（只读三件套：`memory_search` / `memory_get` / `memory_list`）** —— 建议提前。这是"让别的 AI 用上你的记忆"的唯一正确通路（回写分发已由 ADR-002 否决）。做完之后 Cursor / Claude Desktop 配一个 MCP server 就能直接查中央库。
+2. **P2-04 / P2-05 第二个适配器** —— Codex 是跨工具公共格式，Claude 的记忆层已有 `type`/`modified` 可直接映射（见 docs/04 §3.3）。
+3. **P2-02 索引** —— 数据量还很小，随时可做但不紧急。
 
-我的建议顺序仍是"先闭环后索引"（见 roadmap 末尾"建议调整"），但那需要先拍 ADR-011。**在拍板之前，P2-02 是唯一能推进的工单。**
+**关于"分发"这个问题的现状**（避免下一任误解）：`exports/` 目录存在但**没有任何代码写它**，这是 ADR-002 的有意结果，不是遗漏。若要"推"的效果，唯一可接受形式是只写进 MemoryHub 自己的命名空间再由用户 `@import`，那需要新 ADR。
 
-**关于首个适配器选谁**（建议，未生效）：按 [`docs/04-upstream-formats.md`](docs/04-upstream-formats.md) 的证据，Trae CN 与 WorkBuddy 是**纯 Markdown / JSONL，零解压、零 SQLite**，比 Codex（zstd-jsonl + sqlite）简单得多。若目标是"两周内跑通一次真实闭环"，首个适配器选它们更划算；Codex 的指令层仍应做，因为它是跨工具的公共格式。
+**待所有者执行的 AGENTS 修改**（我不能代改契约文件）：
+1. 「已定决策」第 6 条需加限定："Markdown 是唯一真相源**仅指输出侧（vault）**，输入侧允许 md / jsonl / zstd-jsonl / sqlite"（ADR-011 第 3 条）。
+2. 「目录职责」应补 `adapters/`。
+3. `tests/` 那条"必须能在无第三方包的机器上跑通"对阶段 2 已不成立（现有 `pyyaml`）。
+4. 「当前阶段」段落仍写着"阶段 2 及以后尚未实现"，实际已完成 P2-01 / P2-03 / P2-03a。
 
 ## 9. 给接手者的提醒
 

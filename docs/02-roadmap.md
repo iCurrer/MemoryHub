@@ -82,23 +82,39 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
   3. `doctor` 增加"索引与 Markdown 一致性"检查项。
 - **禁止**：索引成为唯一数据源；任何字段只存索引不存 Markdown。
 
-### P2-03 Adapter 接口与能力声明
+### P2-03 Adapter 接口与能力声明 ✅
 
 - **目标**：定义外部来源接入协议，后续所有适配器实现它。
-- **落位**：新建 `src/memoryhub/adapters/base.py`
-- **依赖**：P2-01；**开工前必须先拍板 ADR-011**（`source_kind` 扩展与 `precedence` / `layer` 字段）
+- **落位**：`src/memoryhub/adapters/base.py`（+ `adapters/__init__.py` 注册表）
+- **依赖**：P2-01、ADR-011（已采纳）
 - **格式依据**：[`04-upstream-formats.md`](04-upstream-formats.md)。**不要**照着策划书 §4.2 的猜测设计接口
+- **实际落地**：
+  - `SourcePath(path, adapter, source_kind, layer, precedence, confidence, note)` + `content_hash()`
+  - `Adapter.discover() -> list[SourcePath]`、`Adapter.read(source) -> list[MemoryEntry]`
+  - `capabilities()` 固定返回 `can_write=False`（ADR-002），测试逐 adapter 校验
+  - `read()` 接收 `SourcePath` 而非文本：adapter 可以解析 md / JSONL / SQLite，核心层不需要知道
+  - 共享 helper：`strip_quoted_metadata()`（识别 `> key: value` 头部，含 BOM）、`bullets()`（切分记忆原子）
+- **完成判据**（全部达成）：
+  1. `DummyAdapter` 跑通 discover → read → 落 inbox。
+  2. **非 Markdown** 的 `JsonlDummyAdapter` 跑通同一链路（接口没绑死 markdown）。
+  3. 同一 adapter 返回的两条来源保序（`precedence` / `layer` 不丢失）。
+
+### P2-03a 首个真实适配器：WorkBuddy ✅
+
+- **落位**：`src/memoryhub/adapters/workbuddy.py` + CLI `memoryhub scan`
+- **为什么先做它**（对应 roadmap 末尾"建议调整"）：格式是**纯 Markdown、零解压、零 SQLite**，也是唯一能直接产出"用户画像"类记忆的来源，用最小成本验证整条链路
 - **要点**：
-  - `discover() -> list[SourcePath]`：探测可能的来源路径，返回置信度
-  - `read(path) -> list[MemoryEntry]`：只读解析，产出 `status=pending`
-  - `capabilities`：声明 `can_read` / `can_write`（`can_write` 恒为 `False`，见 ADR-002）
-  - 每个 adapter 必须声明 `name` 与 `source_kind` 默认值
-  - **输入不一定是 Markdown**：接口必须以"字节流 / 路径"为输入，由 adapter 自己决定解析 md、jsonl 还是 sqlite；不得在 base 里写 `read_text()`
-  - **有序来源必须带序**：Codex 的指令链、Claude 的目录层级、Cursor 的 globs 都是有序的，`SourcePath` 需携带 `precedence` / `layer`（若 ADR-011 第 2 条被采纳）
-- **完成判据**：
-  1. 一个 `DummyAdapter` 的测试可完整跑通 discover → read → 落 inbox。
-  2. 一个**非 Markdown** 的 `DummyJsonlAdapter` 也能跑通同一条链路（证明接口没绑死 markdown）。
-  3. 同一 adapter 返回的两条来源能保序（`precedence` 不丢失）。
+  - 路径：`~/.workbuddy/memory/*_memory.md`（`WORKBUDDY_HOME` 可覆盖，测试用）
+  - 头部 `> Last updated:` 作为 `created_at`（无时区则按本地时区补齐）；`# 标题` / `> 元数据` 与正文分离
+  - 每个顶级 bullet = 一条记忆；`## 小节标题` 变成 tag
+  - `source_kind=auto_memory`、`category=profile` → 按 ADR-003 自动进 `review` 档
+  - `scan` 用 `(adapter, source_path, body)` 指纹去重，**重复执行不产生重复条目**
+  - `--dry-run` 只报数字不落盘
+- **完成判据**（全部达成）：
+  1. 给定真实格式样本，产出 N 条 `status=pending` / `trust=review` 条目，`source_path` / `source_hash` / `created_at` 正确。
+  2. 连续两次 `scan` 第二次为 `0 imported, N already present`。
+  3. `--dry-run` 不写任何文件。
+  4. 源目录不存在时退出码 0 且不报错。
 
 ### P2-04 Codex 适配器
 
@@ -214,22 +230,25 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 ---
 
-## 建议调整（需所有者拍板，未生效）
+## 建议调整（已获批准 2026-11-24，部分已执行）
 
-评审认为当前编号顺序是"技术债优先"而非"闭环优先"，建议调整为：
+评审认为原编号顺序是"技术债优先"而非"闭环优先"。所有者已批准调整，执行情况：
 
 ```
-P2-01 (PyYAML)
-  → P2-03 (Adapter 接口) → P2-04 (Codex 单源)   ← 先打通导入→pending→approve
-  → P2-05 (Claude) → P2-02 (SQLite/FTS5)        ← 索引等有真实数据量再做
-  → P2-06/07 (监控 + 校准)
-  → 提前插入 P5-01 的只读三件套 (search/get/list)  ← 让别的 AI 真的能读到中央库
+P2-01 (PyYAML)            ✅ 完成
+P2-03 (Adapter 接口)      ✅ 完成
+P2-03a (WorkBuddy)        ✅ 完成 —— 首个真实来源，闭环已通
+P2-02 (SQLite/FTS5)       ⬜ 待做（可随时开始，无决策依赖）
+P2-04 (Codex 指令链)      ⬜ 待做
+P2-05 (Claude Code)       ⬜ 待做
+P2-06/07 (监控 + 校准)    ⬜ 待做
+P5-01 只读三件套 (MCP)    ⬜ 建议提前 —— 让别的 AI 真的能读到中央库
 ```
 
-三条理由：
+三条理由（保留原文备查）：
 
-1. P2-02 的价值取决于数据量，而没有 adapter 时数据量恒为 0；实测 400 条检索 114ms，撑到阶段 3 没问题。
-2. 策划书 §12.3 自己写的"首个可演示闭环"是「导入→提案→批准→写入→导出→commit」，当前排序把技术债排在最前。
+1. P2-02 的价值取决于数据量；实测 400 条检索 114ms，撑到阶段 3 没问题。
+2. 策划书 §12.3 自己写的"首个可演示闭环"是「导入→提案→批准→写入→导出→commit」。
 3. **P5-03（敏感检测）建议前移到 P3-01 之前**：ADR-003 的 `blocked` 完全依赖自报 `sensitivity`，阶段 3 一开 `auto` 自动入库，密钥可能先进 `vault/`，而检测排在阶段 5 —— 顺序是倒的。
 
 另建议增加一类"使用型工单"（如：接入第一个真实来源后连续自用 7 天并记录审核次数）。

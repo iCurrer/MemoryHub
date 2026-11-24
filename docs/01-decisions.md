@@ -225,9 +225,9 @@
 
 ---
 
-## ADR-011 输入是异构的：格式基线 + 两个待定的字段扩展
+## ADR-011 输入是异构的：格式基线 + 两个字段扩展
 
-**状态**：待所有者拍板（2026-11-24 记录，未生效）
+**状态**：已采纳（2026-11-24，所有者批准三条建议；当天实现）
 
 **背景**：核实上游来源后（证据与置信度见 [`04-upstream-formats.md`](04-upstream-formats.md)），三件事与现有设计不符：
 
@@ -243,6 +243,16 @@
 | 2 | `MemoryEntry` 增加 `precedence: int` 与 `layer: str`（`global` / `project` / `local` / `nested`） | Codex 的覆盖语义、Claude 的加载顺序在入库时丢失，事后无法还原 |
 | 3 | 明确写入：**"Markdown 是唯一真相源"仅指输出侧（vault）**，输入侧允许 md / jsonl / zstd-jsonl / sqlite | P2-03 的接口会被"只解析 md"绑死，写第二遍是必然 |
 
+**最终决策（2026-11-24，三条全部采纳）**：
+
+| # | 结果 | 落地 |
+|---|---|---|
+| 1 | 采纳。`SOURCE_KINDS` 增加 `auto_memory` / `session_distill` / `profile`，`memory` / `transcript` 保留以兼容已有 vault | `models.py::SOURCE_KINDS` |
+| 2 | 采纳。新增 `precedence: int = 0` 与 `layer: str = ""`（空值表示"该来源没有层级"，例如单文件记忆库） | `models.py`、`adapters/base.py::SourcePath` |
+| 3 | 采纳。输出侧不变；输入侧由 adapter 自行决定解析方式，`Adapter.read()` 直接接收 `SourcePath` 而非文本 | `adapters/base.py` |
+
+**第 3 条仍待所有者执行**：`AGENTS.md` 第 6 条「Markdown 是唯一真相源」需要加一句限定。契约文件由所有者维护，本 ADR 不代改。
+
 **为什么这三条要一起拍**：它们共同决定 `MemoryEntry` 的字段集。分开改会连续破坏 `from_markdown` / `to_meta` 的稳定性，而字段语义是本项目明确要求"宁可不写功能也不要改"的东西。
 
 **代价**：
@@ -251,5 +261,7 @@
 - 第 3 条需要在 `AGENTS.md` 第 6 条上加一句限定，属于改契约文件，**只能由所有者动**。
 
 **在拍板之前**：`models.py` 不动。适配器开发不启动（避免基于错的形状写两遍）。P2-01（PyYAML）可以照常做，它与此无关。
+
+**采纳后的实际代价（已发生）**：`_KNOWN_KEYS` 与 `to_meta()` 各加两个字段，因此**已存在的 vault 条目在下次写入时会多出 `precedence: 0` / `layer: ''` 两行**。这是加性变更，旧文件仍可读；但 git diff 会出现一次性的噪音。
 
 **复审时点**：P2-03 开工前必须拍板；`docs/04-upstream-formats.md` 每次上游大版本更新后复核。

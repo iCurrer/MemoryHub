@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from . import __version__, config
+from .adapters import ADAPTERS, build
 from .frontmatter import FrontmatterError
 from .models import CATEGORIES, STATUSES, MemoryEntry, ValidationError, now_iso
 from .storage.markdown_store import LockTimeout, VaultStore
@@ -210,6 +211,59 @@ def cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scan(args: argparse.Namespace) -> int:
+    """Collect from every adapter into ``inbox/pending`` (ADR-002: read-only)."""
+    store = _store(args)
+    selected = [args.adapter] if args.adapter else sorted(ADAPTERS)
+
+    existing_entries, unreadable = store.scan()
+    _unreadable_hint(unreadable)
+    seen = {(e.source_adapter, e.source_path, e.body) for e in existing_entries}
+
+    sources = imported = skipped = failed = 0
+    for name in selected:
+        adapter = build(name)
+        try:
+            discovered = adapter.discover()
+        except OSError as exc:
+            print(f"error: {name}: discovery failed: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        print(f"{name:<10} {len(discovered)} source(s)  read-only")
+        for source in discovered:
+            sources += 1
+            try:
+                entries = adapter.read(source)
+            except (OSError, UnicodeDecodeError, ValidationError) as exc:
+                print(f"error: {name}: cannot read {source.path}: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+            fresh = duplicate = 0
+            for entry in entries:
+                fingerprint = (entry.source_adapter, entry.source_path, entry.body)
+                if fingerprint in seen:
+                    duplicate += 1
+                    skipped += 1
+                    continue
+                fresh += 1
+                imported += 1
+                if not args.dry_run:
+                    store.create(entry)
+                seen.add(fingerprint)
+            print(f"  {source.path.name}: {fresh} new, {duplicate} already present")
+
+    print()
+    print(f"sources   {sources}")
+    if args.dry_run:
+        print(f"entries   {imported} would be imported (dry run, nothing written)")
+    else:
+        print(f"entries   {imported} imported, {skipped} already present")
+    if failed:
+        print(f"{failed} source(s) failed", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
     entries, errors = store.scan()
@@ -346,6 +400,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --approve: also bypass the review tier (ADR-003 escape hatch)",
     )
     p_new.set_defaults(func=cmd_new)
+
+    p_scan = sub.add_parser(
+        "scan", parents=[vault_arg], help="collect from external sources into inbox"
+    )
+    p_scan.add_argument(
+        "--adapter",
+        choices=sorted(ADAPTERS),
+        default=None,
+        help="only run one adapter (default: all)",
+    )
+    p_scan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be imported without writing anything",
+    )
+    p_scan.set_defaults(func=cmd_scan)
 
     p_list = sub.add_parser("list", parents=[vault_arg], help="list memories")
     p_list.add_argument("--status", choices=STATUSES, default=None)

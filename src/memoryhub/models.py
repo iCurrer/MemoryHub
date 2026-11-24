@@ -14,8 +14,21 @@ CATEGORIES = ("profile", "preference", "project", "knowledge", "decision")
 STATUSES = ("pending", "approved", "rejected", "archived")
 TRUST_LEVELS = ("auto", "review", "blocked")
 SENSITIVITIES = ("normal", "personal", "sensitive", "secret")
-SOURCE_KINDS = ("instruction", "memory", "transcript", "doc")
+#: ``memory`` and ``transcript`` are the phase 1 values, kept so existing vaults
+#: keep loading. ADR-011 adds the finer kinds; new code must use those.
+SOURCE_KINDS = (
+    "instruction",
+    "auto_memory",
+    "session_distill",
+    "profile",
+    "doc",
+    "memory",
+    "transcript",
+)
 CONFIDENCES = ("high", "medium", "low", "unknown")
+#: Where a source sits in its tool's instruction chain (ADR-011).
+#: Empty means "this source has no layering" (a single memory file, a doc).
+LAYERS = ("global", "project", "local", "nested")
 
 #: ``mem_<yyyymmdd>T<hhmmss>_<hex>``. The suffix used to be 4 hex chars, which
 #: collided under bulk import (32 duplicates per 2000 ids); it is now 8. The
@@ -34,6 +47,8 @@ _KNOWN_KEYS = (
     "source_path",
     "source_kind",
     "source_hash",
+    "precedence",
+    "layer",
     "created_at",
     "updated_at",
     "valid_from",
@@ -70,6 +85,8 @@ class MemoryEntry:
     source_path: str = ""
     source_kind: str = "memory"
     source_hash: str = ""
+    precedence: int = 0
+    layer: str = ""
     created_at: str = ""
     updated_at: str = ""
     valid_from: str = ""
@@ -135,6 +152,16 @@ class MemoryEntry:
         if self.confidence not in CONFIDENCES:
             raise ValidationError(
                 f"invalid confidence {self.confidence!r}; expected one of {CONFIDENCES}"
+            )
+        if not isinstance(self.precedence, int) or isinstance(self.precedence, bool):
+            raise ValidationError(
+                f"precedence must be an int, got {type(self.precedence).__name__}"
+            )
+        if self.precedence < 0:
+            raise ValidationError("precedence must not be negative")
+        if self.layer not in LAYERS and self.layer != "":
+            raise ValidationError(
+                f"invalid layer {self.layer!r}; expected one of {LAYERS} or empty"
             )
         if not isinstance(self.body, str) or not self.body.strip():
             raise ValidationError("body must not be empty")
@@ -208,6 +235,8 @@ class MemoryEntry:
             "source_path": self.source_path,
             "source_kind": self.source_kind,
             "source_hash": self.source_hash,
+            "precedence": self.precedence,
+            "layer": self.layer,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "valid_from": self.valid_from,
@@ -259,8 +288,17 @@ class MemoryEntry:
         sensitivity: str = "normal",
         confidence: str = "unknown",
         supersedes: Optional[List[str]] = None,
+        created_at: Optional[str] = None,
+        precedence: int = 0,
+        layer: str = "",
     ) -> "MemoryEntry":
+        """Build a pending entry.
+
+        ``created_at`` lets an adapter carry the source's own timestamp instead
+        of "now", which matters for imported memories: their age is evidence.
+        """
         stamp = now_iso()
+        moment = created_at or stamp
         entry = cls(
             id=cls.new_id(),
             category=category,
@@ -272,9 +310,11 @@ class MemoryEntry:
             source_path=source_path,
             source_kind=source_kind,
             source_hash=source_hash,
-            created_at=stamp,
+            precedence=precedence,
+            layer=layer,
+            created_at=moment,
             updated_at=stamp,
-            valid_from=stamp,
+            valid_from=moment,
             supersedes=list(supersedes or []),
             tags=list(tags or []),
         )

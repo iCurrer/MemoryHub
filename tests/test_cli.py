@@ -27,13 +27,17 @@ class CliTests(unittest.TestCase):
         self.base = Path(self._tmp.name)
         self.vault = self.base / "vault-root"
         self.home = self.base / "home"
+        self.workbuddy = self.base / "workbuddy"
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
     def run_cli(self, *argv: str) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
-        env = {"MEMORYHUB_HOME": str(self.home)}
+        env = {
+            "MEMORYHUB_HOME": str(self.home),
+            "WORKBUDDY_HOME": str(self.workbuddy),
+        }
         with mock.patch.dict(os.environ, env, clear=False):
             os.environ.pop("MEMORYHUB_VAULT", None)
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -150,6 +154,54 @@ class CliTests(unittest.TestCase):
         code, _out, err = self.run_cli("list")
         self.assertEqual(code, 0)
         self.assertIn("could not be read", err)
+
+    # -------------------------------------------------------------- scan
+
+    def write_workbuddy_sample(self) -> None:
+        memory = self.workbuddy / "memory"
+        memory.mkdir(parents=True, exist_ok=True)
+        (memory / "demo_memory.md").write_text(
+            "# User Memory Profile\n"
+            "> Last updated: 2026-11-15T07:52:40+08:00\n"
+            "\n## Memory Block\n\n"
+            "- prefers python for tooling\n"
+            "- dislikes silent write-backs\n",
+            encoding="utf-8",
+        )
+
+    def test_scan_imports_pending_entries(self) -> None:
+        self.init_vault()
+        self.write_workbuddy_sample()
+        code, out, err = self.run_cli("scan")
+        self.assertEqual(code, 0, err)
+        self.assertIn("2 imported", out)
+        _code, listed, _err = self.run_cli("list", "--status", "pending")
+        self.assertIn("2 entries", listed)
+
+    def test_scan_is_idempotent(self) -> None:
+        self.init_vault()
+        self.write_workbuddy_sample()
+        self.run_cli("scan")
+        code, out, err = self.run_cli("scan")
+        self.assertEqual(code, 0, err)
+        self.assertIn("0 imported, 2 already present", out)
+        _code, listed, _err = self.run_cli("stats")
+        self.assertIn("total    2", listed)
+
+    def test_scan_dry_run_writes_nothing(self) -> None:
+        self.init_vault()
+        self.write_workbuddy_sample()
+        code, out, _err = self.run_cli("scan", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("would be imported", out)
+        _code, listed, _err = self.run_cli("list")
+        self.assertIn("0 entries", listed)
+
+    def test_scan_with_no_sources_succeeds(self) -> None:
+        self.init_vault()
+        code, out, err = self.run_cli("scan")
+        self.assertEqual(code, 0, err)
+        self.assertIn("0 source(s)", out)
 
 
 if __name__ == "__main__":
