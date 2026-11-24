@@ -304,10 +304,10 @@ Codex 是"近的覆盖远的"，Claude 是"层级拼接 + local 在后"，Cursor
 
 | 工具 | 记忆落点 | 格式 | 置信度 | 适配成本 |
 |---|---|---|---|---|
-| **Cherry Studio** | `%APPDATA%\CherryStudio\Data\Agents\<agent>\`：`SOUL.md`、`USER.md`、`memory\FACT.md` | Markdown | **实盘** | **低** —— 与已实现的 WorkBuddy persona 同构 |
 | **Gemini CLI** | `~/.gemini/GEMINI.md`（全局偏好）+ 仓库 `GEMINI.md`（项目指令）+ **per-project private memory 目录**（路径官方未写，待核） | Markdown | 官方 | 低 —— 指令层复用 `sections()` |
 | Windsurf | "Cascade Memories"（官方承认有记忆，**落盘位置未核实**） | 未核实 | 官方 | 中 |
 | Cline / Roo Code | 项目内 `memory-bank/*.md`，由提示词驱动 agent 维护 | Markdown | 官方（最佳实践） | 低，但要用户给项目根 |
+| **Cherry Studio** | `Data\Agents\<agent>\`：`USER.md`（对该用户的认知）、`memory\FACT.md`（长期知识）。**`SOUL.md` 是助手自己的性格，不是用户记忆** | Markdown | **实盘** | 已适配（`cherry`），但**默认只采用户自建的 agent**；本机只有内置的 `cherry-support`，故发现 0 条 |
 | 已适配 | Codex、Claude Code/Desktop、WorkBuddy、Trae CN | — | — | 见前文各节 |
 
 ### B. 只有「指令」没有「记忆」（agent 只读，人写）
@@ -324,16 +324,24 @@ Cursor（`.cursor/rules/*.mdc`）、GitHub Copilot（`.github/copilot-instructio
 | DSH（本 harness） | `~/.dsh/`：`profiles/`、`sessions/`、`storages/`、`skills/`（会话，不是记忆） |
 | Claude Desktop | 云端（见 §3.0） |
 
-### D. 一个正在成型的公共形状
+### D. 一个正在成型、但**语义各不相同**的公共形状
 
 WorkBuddy 的 `user-*-personal/{IDENTITY,SOUL,USER,MEMORY}.md`、Cherry Studio 的
 `Agents/<agent>/{SOUL,USER,memory/FACT}.md`、Claude 的 `memory/{MEMORY.md, 主题}.md`
-—— **三者是同一个套路**：人格文件（SOUL/USER/IDENTITY）+ 记忆文件（MEMORY/FACT）+ 索引。
+—— 文件名几乎一样，**但归属不同**，这是最容易踩的坑：
 
-这意味着两件事：
+| 文件 | 属于谁 | 应归为 |
+|---|---|---|
+| `SOUL.md` / `IDENTITY.md` | **助手自己**的人格与语气（"mirror the user's terminology"） | `instruction`，通常**不该入库** |
+| `USER.md` | 助手**对用户的认知** | `auto_memory` + `category=profile` → review |
+| `MEMORY.md` / `FACT.md` | 助手积累的事实 | `auto_memory` + `category=knowledge/profile` |
+| WorkBuddy 的 `user-*-personal/USER.md` | **用户自己**的身份描述 | `category=profile` |
 
-1. 写一个通用的「人格目录适配器」可能比给每个工具写一个更划算；
-2. 这套形状**没有版本、没有来源、没有时效**。谁先把它做成可审计的，谁就占了那一格 —— 但那是产品判断，不是格式判断。
+> **教训（2026-11-24 实际犯过）**：我一开始把 Cherry Studio 的 `SOUL.md` 当成"用户人格"按 `profile` 导入了。它其实是那个助手的性格设定——正好撞上 `AGENTS.md` 的硬规则"指令不是人格记忆"。
+>
+> 推论：**共用解析器可以，共用分类判断不行。** `adapters/persona.py` 只负责切分格式，`source_kind` / `category` 必须由每个工具自己声明。
+>
+> 还有一个更实际的结论：**内置助手（`cherry-support`、`system`）的文件是产品模板，不是用户数据。** 默认跳过；跳过之后本机发现 0 条，这才是诚实的答案。
 
 ## 9. 怎么复核（复制即用）
 ```powershell

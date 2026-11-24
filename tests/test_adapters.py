@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from memoryhub.adapters import build, names  # noqa: E402
 from memoryhub.adapters.base import Adapter, SourcePath, bullets  # noqa: E402
+from memoryhub.adapters.cherry import CherryStudioAdapter  # noqa: E402
 from memoryhub.adapters.claude import ClaudeAdapter  # noqa: E402
 from memoryhub.adapters.workbuddy import WorkBuddyAdapter  # noqa: E402
 from memoryhub.models import MemoryEntry  # noqa: E402
@@ -408,6 +409,77 @@ class ClaudeAdapterTests(unittest.TestCase):
         finally:
             claude_module.MAX_INSTRUCTION_BYTES = original
         self.assertEqual(sources, [])
+
+
+class CherryStudioAdapterTests(unittest.TestCase):
+    """Layout observed on a real install; fixtures mirror it.
+
+    The key assertion is negative: a built-in assistant's ``SOUL.md`` must not be
+    imported, because it is that assistant's personality, not the user's memory.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+
+        builtin = self.home / "Data" / "Agents" / "cherry-support"
+        (builtin / "memory").mkdir(parents=True)
+        (builtin / "SOUL.md").write_text(
+            "# Personality\n\n## Tone\n\n- Mirror the user's terminology.\n", encoding="utf-8"
+        )
+        (builtin / "USER.md").write_text(
+            "# User\n\n## Name\n\n- Shipped template.\n", encoding="utf-8"
+        )
+
+        mine = self.home / "Data" / "Agents" / "my-research-helper"
+        (mine / "memory").mkdir(parents=True)
+        (mine / "SOUL.md").write_text(
+            "# Personality\n\n## Tone\n\n- Be terse.\n", encoding="utf-8"
+        )
+        (mine / "USER.md").write_text(
+            "# User\n\n## Name\n\n- Call me Si.\n\n## Prefs\n\n- Prefers local-first tools.\n",
+            encoding="utf-8",
+        )
+        (mine / "memory" / "FACT.md").write_text(
+            "# Long-term knowledge\n\nKeeps one repository per idea.\n", encoding="utf-8"
+        )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_builtin_agents_are_skipped_by_default(self) -> None:
+        sources = CherryStudioAdapter(self.home).discover()
+        self.assertTrue(sources, "the user-created agent must still be discovered")
+        self.assertFalse(any("cherry-support" in s.path.parts for s in sources))
+
+    def test_soul_is_never_imported(self) -> None:
+        sources = CherryStudioAdapter(self.home, include_builtin=True).discover()
+        self.assertFalse(any(s.path.name in ("SOUL.md", "IDENTITY.md") for s in sources))
+
+    def test_user_and_fact_are_agent_memory_not_instructions(self) -> None:
+        sources = {s.path.name: s for s in CherryStudioAdapter(self.home).discover()}
+        self.assertEqual(sources["USER.md"].source_kind, "auto_memory")
+        self.assertEqual(sources["FACT.md"].source_kind, "auto_memory")
+
+    def test_categories_split_user_model_from_knowledge(self) -> None:
+        adapter = CherryStudioAdapter(self.home)
+        by_name = {s.path.name: s for s in adapter.discover()}
+        user = adapter.read(by_name["USER.md"])
+        fact = adapter.read(by_name["FACT.md"])
+        self.assertTrue(all(e.category == "profile" for e in user))
+        self.assertTrue(all(e.category == "knowledge" for e in fact))
+
+    def test_entries_stay_pending_with_provenance(self) -> None:
+        adapter = CherryStudioAdapter(self.home)
+        entry = adapter.read(adapter.discover()[0])[0]
+        self.assertEqual(entry.status, "pending")
+        self.assertEqual(entry.trust, "review")
+        self.assertEqual(entry.source_adapter, "cherry")
+        self.assertTrue(entry.source_hash.startswith("sha256:"))
+        self.assertTrue(any(tag.startswith("agent-") for tag in entry.tags))
+
+    def test_missing_install_is_not_an_error(self) -> None:
+        self.assertEqual(CherryStudioAdapter(self.home / "absent").discover(), [])
 
 
 if __name__ == "__main__":

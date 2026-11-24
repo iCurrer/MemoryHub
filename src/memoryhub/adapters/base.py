@@ -16,6 +16,7 @@ into a list of strings.
 from __future__ import annotations
 
 import hashlib
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,6 +115,11 @@ def sections(text: str) -> List[Tuple[str, str]]:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def slug(text: str) -> str:
+    """Lowercase tag slug that keeps CJK (``## 编码约定`` must not become "")."""
+    return re.sub(r"[^\w]+", "-", text.lower(), flags=re.UNICODE).strip("-")
 
 
 def strip_quoted_metadata(text: str) -> Tuple[Dict[str, str], List[str]]:
