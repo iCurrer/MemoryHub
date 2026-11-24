@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -18,6 +19,7 @@ from memoryhub.adapters import build, names  # noqa: E402
 from memoryhub.adapters.base import Adapter, SourcePath, bullets  # noqa: E402
 from memoryhub.adapters.cherry import CherryStudioAdapter  # noqa: E402
 from memoryhub.adapters.claude import ClaudeAdapter  # noqa: E402
+from memoryhub.adapters.codex import CodexAdapter  # noqa: E402
 from memoryhub.adapters.workbuddy import WorkBuddyAdapter  # noqa: E402
 from memoryhub.models import MemoryEntry  # noqa: E402
 from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
@@ -480,6 +482,86 @@ class CherryStudioAdapterTests(unittest.TestCase):
 
     def test_missing_install_is_not_an_error(self) -> None:
         self.assertEqual(CherryStudioAdapter(self.home / "absent").discover(), [])
+
+
+class CodexAdapterTests(unittest.TestCase):
+    """Chain semantics verified against codex-cli 0.147.0 (see docs/04 §2.1)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.home = self.root / "codex-home"
+        self.project = self.root / "project"
+        self.project.mkdir()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def write(self, relative: str, text: str) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def adapter(self, cwd: Optional[Path] = None) -> CodexAdapter:
+        return CodexAdapter(
+            home=self.home, project_root=self.project, cwd=cwd or self.project
+        )
+
+    def test_global_agents_md_is_the_weakest_layer(self) -> None:
+        self.write("codex-home/AGENTS.md", "# Global\n\n- prefer pnpm\n")
+        sources = self.adapter().discover()
+        self.assertEqual(len(sources), 1)
+        self.assertEqual((sources[0].layer, sources[0].precedence), ("global", 0))
+
+    def test_override_shadows_agents_md_in_the_same_directory(self) -> None:
+        # Verified empirically: the shadowed AGENTS.md is not loaded at all.
+        self.write("project/AGENTS.md", "- shadowed rule\n")
+        self.write("project/AGENTS.override.md", "- winning rule\n")
+        sources = self.adapter().discover()
+        self.assertEqual([s.path.name for s in sources], ["AGENTS.override.md"])
+
+    def test_root_and_nested_chain_keep_order(self) -> None:
+        self.write("project/AGENTS.md", "# Root\n\n- root rule\n")
+        self.write("project/sub/AGENTS.md", "# Sub\n\n- sub rule\n")
+        sources = self.adapter(cwd=self.project / "sub").discover()
+        self.assertEqual([s.layer for s in sources], ["project", "nested"])
+        self.assertEqual([s.precedence for s in sources], [1, 2])
+
+    def test_fallback_names_come_from_config(self) -> None:
+        self.write(
+            "codex-home/config.toml",
+            'project_doc_fallback_filenames = ["TEAM_GUIDE.md"]\n',
+        )
+        self.write("project/TEAM_GUIDE.md", "- team rule\n")
+        sources = self.adapter().discover()
+        self.assertEqual([s.path.name for s in sources], ["TEAM_GUIDE.md"])
+
+    def test_combined_size_cap_stops_the_chain(self) -> None:
+        self.write("codex-home/config.toml", "project_doc_max_bytes = 64\n")
+        self.write("project/AGENTS.md", "x" * 100 + "\n")
+        self.write("project/sub/AGENTS.md", "- never reached\n")
+        sources = self.adapter(cwd=self.project / "sub").discover()
+        self.assertEqual(sources, [])
+
+    def test_empty_files_are_ignored(self) -> None:
+        self.write("project/AGENTS.md", "")
+        self.assertEqual(self.adapter().discover(), [])
+
+    def test_instruction_entries_need_review(self) -> None:
+        self.write(
+            "project/AGENTS.md",
+            "# Rules\n\n- never force push\n\n"
+            "## Commands\n\n```bash\n# not a heading\npnpm test\n```\n",
+        )
+        adapter = self.adapter()
+        entries = adapter.read(adapter.discover()[0])
+        self.assertEqual(len(entries), 2)
+        self.assertTrue(all(e.source_kind == "instruction" for e in entries))
+        self.assertTrue(all(e.category == "decision" for e in entries))
+        self.assertTrue(all(e.trust == "review" for e in entries))
+        self.assertTrue(all(e.source_hash.startswith("sha256:") for e in entries))
+        self.assertIn("# not a heading", entries[1].body)
 
 
 if __name__ == "__main__":

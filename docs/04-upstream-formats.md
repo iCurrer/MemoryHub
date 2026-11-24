@@ -34,9 +34,21 @@
 
 ## 2. Codex
 
-### 2.1 指令层是一条带覆盖语义的链（镜像）
+### 2.1 指令层是一条带覆盖语义的链（**实盘已验**）
 
-来源：[官方页的镜像副本](https://github.com/mehmetbaykar/codex-docs-skill/blob/main/skills/codex-docs/references/agent-configuration__agents-md.md)（`learn.chatgpt.com` 直接抓取失败）。
+来源：官方页的镜像副本 + **本机 codex-cli 0.147.0 实测**（`learn.chatgpt.com` 直接抓取失败）。
+
+> **实测（2026-11-24）**：搭三层目录树 —— 根 `AGENTS.md`（ROOT-RULE→APPLE）、
+> `sub/AGENTS.md`（SUB-RULE→BANANA）、`sub/AGENTS.override.md`（OVERRIDE-RULE→CHERRY），
+> 在 `sub` 下执行 `codex exec` 让它复述指令行：
+>
+> ```
+> ROOT-RULE 1 次 | OVERRIDE-RULE 1 次 | SUB-RULE 0 次
+> APPLE     1 次 | CHERRY        1 次 | BANANA   0 次
+> ```
+>
+> 结论：根与嵌套**都加载**；同目录下 `AGENTS.override.md` 生效时 `AGENTS.md`
+> **完全不被读取**（是遮蔽，不是合并）。已固化为 `adapters/codex.py` 的测试。
 
 发现顺序（每次启动重建一次，无缓存）：
 

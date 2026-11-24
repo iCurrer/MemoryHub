@@ -1,4 +1,4 @@
-# 开发路线与工单
+﻿# 开发路线与工单
 
 本文件是**可执行的任务清单**，供人或 AI Agent 直接领取。领取规则：
 
@@ -124,7 +124,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 - **`<workspace>/.workbuddy/memory/`**：`MEMORY.md` + 按天文件 `YYYY-MM-DD.md`，**未适配**。工作区路径不能从 home 推导，需要用户给根目录（或读 `workspace-state.json`，结构未验证）
 - 注意：WorkBuddy 的 `MEMORY.md` 是**按标题分组的正文**，Claude 的 `MEMORY.md` 是**链接索引**（`- [Title](file.md)`）。**不要共用解析器。**
 
-### P2-04 Codex 适配器
+### P2-04 Codex 适配器 ✅
 
 - **落位**：`src/memoryhub/adapters/codex.py`
 - **依赖**：P2-03、ADR-011
@@ -138,6 +138,8 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
   2. `AGENTS.md` 被 `AGENTS.override.md` 遮蔽时，被遮蔽的那条不产出（或标为 shadowed）。
   3. 超过 `project_doc_max_bytes` 时，明确报"已截断"而不是静默少内容。
   4. 路径不存在时给出可操作提示（而不是 traceback）。
+- **实际落地**：dapters/codex.py，7 个用例。遮蔽语义已用真 codex exec 验证（docs/04 §2.1）。
+- **已知差异**：单文件超过 project_doc_max_bytes 时我们整份跳过并告警，Codex 会截断取前缀——宁可少导入，不假装读到了。
 
 ### P2-05 Claude Code 适配器 ✅
 
