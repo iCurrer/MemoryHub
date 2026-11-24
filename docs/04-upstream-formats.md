@@ -151,6 +151,8 @@ consolidation_progress(singleton, max_thread_count)
 
 本机样本：`~/.workbuddy/memory/<profile-uuid>_memory.md`（8.7 KB，同目录另有 `.bak`，15 KB）。
 
+> 公开仓脱敏：真实 `<profile-uuid>` 已替换为占位符，它是本机 WorkBuddy 配置目录的稳定标识符，不应随仓库公开。
+
 结构（8.7 KB / 33 行 / 2 个标题 / 7 条 bullet）：
 
 ```markdown

@@ -15,9 +15,9 @@
 | 项 | 值 |
 |---|---|
 | 本地路径 | `D:/project/MemoryHub` |
-| 远端 | `origin → https://github.com/iCurrer/MemoryHub.git`（**公开仓，尚未推送**） |
+| 远端 | `origin → https://github.com/iCurrer/MemoryHub.git`（**公开仓**） |
 | 分支 | `main` |
-| 提交 | 骨架 2 个 + 加固 1 个 |
+| 提交 | 骨架 2 个 + 加固 1 个 + 上游基线 1 个 |
 | 数据目录 | `D:/my-memory`（**尚未创建**，需 `memoryhub init` 生成） |
 
 ## 3. 已实现（可依赖）
