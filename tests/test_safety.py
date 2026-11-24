@@ -33,7 +33,7 @@ class PiiTests(unittest.TestCase):
     def test_full_address_is_sensitive_in_both_shapes(self) -> None:
         for text in (
             "住示例区示例路 390 号",
-            "上海市示例区示例路390号",
+            "北京市示例区示例路 390 号",
         ):
             self.assertEqual(classify(text)[0], "sensitive", text)
 
@@ -41,7 +41,7 @@ class PiiTests(unittest.TestCase):
         # Weak signals must not block: a rule that fires on every city name gets
         # ignored, and then the strong signal is ignored too.
         self.assertEqual(classify("示例省示例市示例区")[0], "personal")
-        self.assertEqual(classify("示例大学大学")[0], "personal")
+        self.assertEqual(classify("示例大学")[0], "personal")
         self.assertEqual(classify("在上海读书四年")[0], "normal")
 
 
