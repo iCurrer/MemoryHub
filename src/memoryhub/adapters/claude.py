@@ -114,12 +114,15 @@ class ClaudeAdapter(Adapter):
 
         # 1. user scope
         user_md = self._instruction_source(self.home / "CLAUDE.md", "global", 0)
+        seen_paths = set()
         if user_md:
             sources.append(user_md)
+            seen_paths.add(user_md.path.resolve())
         for rule in sorted((self.home / "rules").rglob("*.md")):
             found = self._instruction_source(rule, "global", 1)
             if found:
                 sources.append(found)
+                seen_paths.add(found.path.resolve())
 
         # 2. project scope: ./CLAUDE.md wins over ./.claude/CLAUDE.md
         project_md = self._instruction_source(self.project_root / "CLAUDE.md", "project", 10)
@@ -127,12 +130,17 @@ class ClaudeAdapter(Adapter):
             project_md = self._instruction_source(
                 self.project_root / ".claude" / "CLAUDE.md", "project", 10
             )
-        if project_md:
+        # When the scanner runs from the user's home, ``project_root/.claude``
+        # *is* ``~/.claude``: without this guard the same file is reported twice,
+        # once as a user-scope profile and once as a project rule.
+        if project_md and project_md.path.resolve() not in seen_paths:
             sources.append(project_md)
+            seen_paths.add(project_md.path.resolve())
         for rule in sorted((self.project_root / ".claude" / "rules").rglob("*.md")):
             found = self._instruction_source(rule, "project", 11)
-            if found:
+            if found and found.path.resolve() not in seen_paths:
                 sources.append(found)
+                seen_paths.add(found.path.resolve())
 
         # 3. local scope loads after CLAUDE.md in the same directory
         local_md = self._instruction_source(

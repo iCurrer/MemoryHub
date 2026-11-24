@@ -490,6 +490,44 @@ def cmd_log(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sensitivity(args: argparse.Namespace) -> int:
+    """Change how sensitive an entry is, re-deriving its trust tier (ADR-003).
+
+    This is the exit from ``blocked``: an imported credit card number can be marked
+    ``secret`` first and released later. It is also the only way to *raise*
+    sensitivity after import, which matters because adapters cannot know what is
+    personal -- they only know what a file says.
+    """
+    store = _store(args)
+    try:
+        entry = store.get(args.id)
+    except (ValidationError, FrontmatterError) as exc:
+        print(f"error: {args.id} cannot be read: {exc}", file=sys.stderr)
+        return 1
+    if entry is None:
+        print(f"error: no such memory: {args.id}", file=sys.stderr)
+        return 1
+
+    previous = (entry.sensitivity, entry.trust, entry.status)
+    entry.sensitivity = args.level
+    entry.trust = entry.infer_trust()
+    if entry.trust == "blocked" and entry.status == "approved":
+        print(
+            f"error: {entry.id} is approved; raising sensitivity to {args.level!r} "
+            "would leave an approved-but-blocked entry. Reject or archive it first "
+            f"(`memoryhub reject {entry.id}`), then set the level and re-approve.",
+            file=sys.stderr,
+        )
+        return 1
+    entry.updated_at = now_iso()
+    store.save(entry)
+    print(
+        f"{entry.id}  sensitivity {previous[0]} -> {entry.sensitivity}  "
+        f"trust {previous[1]} -> {entry.trust}  (was {previous[2]})"
+    )
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
     entries, errors = store.scan()
@@ -653,6 +691,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="report what would be imported without writing anything",
     )
     p_scan.set_defaults(func=cmd_scan)
+
+    p_sens = sub.add_parser(
+        "sensitivity",
+        parents=[vault_arg],
+        help="change an entry's sensitivity level (re-derives trust)",
+    )
+    p_sens.add_argument("id")
+    p_sens.add_argument(
+        "--level", required=True, choices=("normal", "personal", "sensitive", "secret")
+    )
+    p_sens.set_defaults(func=cmd_sensitivity)
 
     p_log = sub.add_parser(
         "log", parents=[vault_arg], help="summarise recent changes from the vault's git history"

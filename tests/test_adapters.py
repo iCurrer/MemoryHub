@@ -258,12 +258,13 @@ class WorkBuddyAdapterTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_persona_directory_is_discovered_as_profile(self) -> None:
+    def test_persona_directory_keeps_the_user_and_drops_the_assistant(self) -> None:
         self.write_persona()
         sources = {s.path.name: s for s in WorkBuddyAdapter(self.home).discover()}
-        self.assertEqual(sources["IDENTITY.md"].source_kind, "profile")
+        # IDENTITY / SOUL are the assistant's self-description, never user memory.
+        self.assertNotIn("IDENTITY.md", sources)
+        self.assertNotIn("SOUL.md", sources)
         self.assertEqual(sources["USER.md"].source_kind, "profile")
-        self.assertEqual(sources["SOUL.md"].source_kind, "profile")
         self.assertEqual(sources["MEMORY.md"].source_kind, "auto_memory")
         self.assertEqual(sources["demo_memory.md"].source_kind, "auto_memory")
 
@@ -272,11 +273,11 @@ class WorkBuddyAdapterTests(unittest.TestCase):
         adapter = WorkBuddyAdapter(self.home)
         by_name = {s.path.name: s for s in adapter.discover()}
 
-        identity = adapter.read(by_name["IDENTITY.md"])
-        self.assertEqual(len(identity), 2)  # title + one section
-        self.assertTrue(all(e.category == "profile" for e in identity))
-        self.assertTrue(all(e.trust == "review" for e in identity))
-        self.assertTrue(all(e.source_hash.startswith("sha256:") for e in identity))
+        user = adapter.read(by_name["USER.md"])
+        self.assertTrue(user)
+        self.assertTrue(all(e.category == "profile" for e in user))
+        self.assertTrue(all(e.trust == "review" for e in user))
+        self.assertTrue(all(e.source_hash.startswith("sha256:") for e in user))
 
         index = adapter.read(by_name["MEMORY.md"])
         self.assertEqual(len(index), 2, "persona MEMORY.md is a bullet list of facts")
@@ -341,6 +342,19 @@ class ClaudeAdapterTests(unittest.TestCase):
         sources = [s for s in self.adapter().discover() if s.layer == "project"]
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].path.name, "CLAUDE.md")
+
+    def test_user_file_is_not_also_reported_as_project_scope(self) -> None:
+        # Scan from the user's home: project_root/.claude/CLAUDE.md is then the
+        # very file that user scope already reported.
+        self.write(
+            "claude-home/CLAUDE.md",
+            "# 用户信息\n\n- 独立开发者\n\n# 用户偏好\n\n- 偏好本地优先\n",
+        )
+        home = self.root / "claude-home"
+        adapter = ClaudeAdapter(home=home, project_root=home.parent)
+        sources = adapter.discover()
+        self.assertEqual([s.layer for s in sources], ["global"])
+        self.assertEqual(len(adapter.read(sources[0])), 2)
 
     def test_missing_everything_is_not_an_error(self) -> None:
         self.assertEqual(self.adapter().discover(), [])

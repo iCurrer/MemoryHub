@@ -252,6 +252,11 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 | P5-01 | MCP stdio：`memory_search` / `memory_get` / `memory_list` / `memory_propose` / `memory_status` | 任一 MCP 客户端可调用，stdout 只输出协议消息 |
 | P5-02 | 权限分级 Read / Propose / Admin | ✅ 完成 |
 
+**P5-03 首刀（2026-11-24，实际使用时补）**：真实导入暴露了两件事 —— ① 适配器无法判断"什么是隐私"，
+`MEMORY.md` 里的住址/籍贯/学校被当作 `normal` 导入；② **没有任何命令能改 sensitivity**，
+于是 ADR-003 那句"先降级敏感标记再批准"走不通。已补 `memoryhub sensitivity <id> --level`：
+改级别后重新推导 trust，可升可降；对已批准条目升到 blocked 会被拒绝并提示先 reject。
+
 **P5-02 实际落地**：`memoryhub mcp --permission read|propose|admin`（或 `$MEMORYHUB_MCP_PERMISSION`）。
 
 | 级别 | 暴露的工具 |

@@ -117,6 +117,17 @@ def sections(text: str) -> List[Tuple[str, str]]:
 # ------------------------------------------------------------------ helpers
 
 
+#: Persona filenames that belong to the **assistant**, not to the user.
+#:
+#: Learned the hard way, twice: Cherry Studio's ``SOUL.md`` ("# Personality" /
+#: "# Tone") and WorkBuddy's ``IDENTITY.md`` ("Who Am I?") / ``SOUL.md``
+#: ("Who You Are") are the assistant describing itself. Importing them as
+#: user profile pollutes the vault with rules like "mirror the user's terminology".
+#: ``USER.md`` / ``MEMORY.md`` / ``FACT.md`` are the opposite: they are what the
+#: assistant believes *about the user*, which is memory.
+ASSISTANT_PERSONA_FILES = ("IDENTITY.md", "SOUL.md")
+
+
 def slug(text: str) -> str:
     """Lowercase tag slug that keeps CJK (``## 编码约定`` must not become "")."""
     return re.sub(r"[^\w]+", "-", text.lower(), flags=re.UNICODE).strip("-")

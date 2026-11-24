@@ -18,7 +18,14 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..models import MemoryEntry
-from .base import Adapter, SourcePath, bullets, sections, strip_quoted_metadata
+from .base import (
+    ASSISTANT_PERSONA_FILES,
+    Adapter,
+    SourcePath,
+    bullets,
+    sections,
+    strip_quoted_metadata,
+)
 
 _STAMP_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
@@ -93,17 +100,20 @@ class WorkBuddyAdapter(Adapter):
         return found
 
     def _persona_files(self) -> List[SourcePath]:
-        """``user-<uuid>-personal/``: IDENTITY / SOUL / USER / MEMORY.
+        """``user-<uuid>-personal/``: USER + MEMORY only.
 
-        This is the part that actually describes the person, so it is imported as
-        ``profile`` rather than as generic auto-memory. ``MEMORY.md`` here is an
-        index-shaped memory file (headings + bullets), not a link index.
+        ``IDENTITY.md`` / ``SOUL.md`` sit in the same directory but describe the
+        assistant ("Who Am I?", "Core Truths", "Boundaries"), so they are skipped --
+        see :data:`ASSISTANT_PERSONA_FILES`. ``MEMORY.md`` here is a bullet list of
+        facts about the person, not a link index.
         """
         found: List[SourcePath] = []
         for persona_dir in sorted(self.home.glob("user-*-personal")):
             if not persona_dir.is_dir():
                 continue
-            for name in ("IDENTITY.md", "SOUL.md", "USER.md"):
+            # IDENTITY / SOUL describe the assistant, not the user: see
+            # ASSISTANT_PERSONA_FILES for why this is not a judgement call.
+            for name in ("USER.md",):
                 path = persona_dir / name
                 if path.is_file():
                     found.append(

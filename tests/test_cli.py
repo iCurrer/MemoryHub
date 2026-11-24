@@ -292,6 +292,41 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("--all", err)
 
+    def test_sensitivity_raise_blocks_approval(self) -> None:
+        entry = self.make("lives near a landmark")
+        code, out, err = self.run_cli("sensitivity", entry, "--level", "sensitive")
+        self.assertEqual(code, 0, err)
+        self.assertIn("normal -> sensitive", out)
+        self.assertIn("trust auto -> blocked", out)
+        code, _out, err = self.run_cli("approve", entry)
+        self.assertEqual(code, 1)
+        self.assertIn("blocked", err)
+
+    def test_sensitivity_can_be_lowered_again(self) -> None:
+        entry = self.make("a fact")
+        self.run_cli("sensitivity", entry, "--level", "secret")
+        code, out, err = self.run_cli("sensitivity", entry, "--level", "normal")
+        self.assertEqual(code, 0, err)
+        self.assertIn("trust blocked -> auto", out)
+        self.assertEqual(self.run_cli("approve", entry)[0], 0)
+
+    def test_raising_sensitivity_on_an_approved_entry_is_refused(self) -> None:
+        entry = self.make("already approved")
+        self.run_cli("approve", entry)
+        code, _out, err = self.run_cli("sensitivity", entry, "--level", "secret")
+        self.assertEqual(code, 1)
+        self.assertIn("Reject or archive", err)
+        _c, listed, _e = self.run_cli("list", "--status", "approved")
+        self.assertIn("1 entries", listed)
+
+    def test_sensitivity_unknown_id_is_an_error(self) -> None:
+        self.init_vault()
+        code, _out, err = self.run_cli(
+            "sensitivity", "mem_20200101T000000_deadbeef", "--level", "personal"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("no such memory", err)
+
 
 if __name__ == "__main__":
     unittest.main()
