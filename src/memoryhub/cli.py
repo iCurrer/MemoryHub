@@ -14,6 +14,7 @@ from .adapters import ADAPTERS, build
 from .frontmatter import FrontmatterError
 from .models import CATEGORIES, STATUSES, MemoryEntry, ValidationError, now_iso
 from .storage.markdown_store import LockTimeout, VaultStore
+from .watcher import import_entries, watch
 
 MIN_PYTHON = (3, 11)
 
@@ -238,18 +239,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 print(f"error: {name}: cannot read {source.path}: {exc}", file=sys.stderr)
                 failed += 1
                 continue
-            fresh = duplicate = 0
-            for entry in entries:
-                fingerprint = (entry.source_adapter, entry.source_path, entry.body)
-                if fingerprint in seen:
-                    duplicate += 1
-                    skipped += 1
-                    continue
-                fresh += 1
-                imported += 1
-                if not args.dry_run:
-                    store.create(entry)
-                seen.add(fingerprint)
+            fresh, duplicate = import_entries(
+                store, entries, seen, write=not args.dry_run
+            )
+            imported += fresh
+            skipped += duplicate
             print(f"  {source.label()}: {fresh} new, {duplicate} already present")
 
     print()
@@ -276,6 +270,27 @@ def cmd_mcp(args: argparse.Namespace) -> int:
         print(f"error: the MCP server needs the `mcp` package: {exc}", file=sys.stderr)
         return 1
     serve(getattr(args, "vault", None))
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Poll the sources and import whatever settled down (P2-06)."""
+    store = _store(args)
+    quiet = 0.0 if args.once else args.quiet
+    print(f"watching  {store.root}")
+    print(f"interval  {args.interval}s   quiet {quiet}s   {'once' if args.once else 'until Ctrl-C'}")
+    try:
+        watch(
+            store,
+            interval=args.interval,
+            quiet_seconds=quiet,
+            iterations=1 if args.once else None,
+            on_change=lambda result: print(
+                f"  + {result.imported} imported, {result.duplicate} already present"
+            ),
+        )
+    except KeyboardInterrupt:
+        print("\nstopped")
     return 0
 
 
@@ -431,6 +446,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="report what would be imported without writing anything",
     )
     p_scan.set_defaults(func=cmd_scan)
+
+    p_watch = sub.add_parser(
+        "watch", parents=[vault_arg], help="poll sources and import changes"
+    )
+    p_watch.add_argument("--interval", type=float, default=2.0, help="poll interval (s)")
+    p_watch.add_argument(
+        "--quiet", type=float, default=3.0, help="wait this long after a change (s)"
+    )
+    p_watch.add_argument(
+        "--once", action="store_true", help="single pass with no debounce, for tests/cron"
+    )
+    p_watch.set_defaults(func=cmd_watch)
 
     p_mcp = sub.add_parser(
         "mcp",

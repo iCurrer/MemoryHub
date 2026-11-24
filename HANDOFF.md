@@ -31,14 +31,16 @@
 | `src/memoryhub/adapters/workbuddy.py` | 两种形态：`memory/<uuid>_memory.md` 与 `user-<uuid>-personal/`（IDENTITY/SOUL/USER/MEMORY） | 稳定（P2-03a），格式依据见 docs/04 §5 |
 | `src/memoryhub/adapters/claude.py` | `CLAUDE.md` 链 + auto memory 适配器 | 指令层**已真机验证**；auto memory 层仍待真数据（P2-05） |
 | `src/memoryhub/adapters/codex.py` | Codex 指令链（override 遮蔽、32 KiB 上限）**已用真 codex exec 验证** | 稳定（P2-04） |
+| `src/memoryhub/watcher/` | 轮询 + 防抖 + 哈希去重（`MtimeTracker`→`Debouncer`→`HashTracker`） | 稳定（P2-06） |
 | `src/memoryhub/mcp/server.py` | 只读 MCP 三件套 + 可见性规则（ADR-012） | 稳定（P5-01 3/5） |
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
 | `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析 | 稳定（注意：`save()` 会整份重写，加配置项前先改成合并写入） |
-| `src/memoryhub/cli.py` | 11 个命令 | 稳定，命令会继续增加 |
+| `src/memoryhub/cli.py` | 12 个命令 | 稳定，命令会继续增加 |
 | `tests/test_store.py` | 30 个用例 | 会随功能增长 |
 | `tests/test_cli.py` | 19 个端到端用例 | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
 | `tests/test_adapters.py` | 27 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude 适配器 |
 | `tests/test_mcp.py` | 9 个用例 | 可见性规则 + 真实 stdio 握手（含 stdout 纯净性断言） |
+| `tests/test_watcher.py` | 11 个用例 | 防抖/哈希/排除 + 注入时钟 |
 
 可用命令：`init` `doctor` `new` `scan` `mcp` `list` `show` `search` `approve` `reject` `stats`
 
@@ -61,7 +63,7 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 96 passed
+python -m unittest discover -s tests -v          # 期望 107 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 7 个目录
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -75,7 +77,7 @@ python -m memoryhub mcp --vault /tmp/v            # 阻塞，等 MCP 客户端�
 ## 5. 未实现（不要以为已有）
 
 - 采集：**三个适配器**（WorkBuddy / Claude / Codex）。WorkBuddy 覆盖两种形态（`memory/*_memory.md`、`user-*-personal/`），**工作区级 `<workspace>/.workbuddy/memory/` 未做（P2-03b）**；Claude Code 覆盖 `CLAUDE.md` 链（**指令层已真机验证**）+ auto memory（**目录存在但为空，未验证**）；Codex 只做了指令层，**记忆层（`memories_1.sqlite` + `sessions/*.jsonl`）未做**。Cursor / Trae 都没有
-- 监控：无 Watchdog，改动来源文件不会被发现，`scan` 要手动跑
+- 监控：**有轮询 watcher（`watch`）**，2 秒间隔 + 防抖 + 哈希；没有 `watchdog`（有意，见 roadmap P2-06）
 - 索引：无 SQLite，`search` 是遍历目录（400 条约 114ms，可接受）
 - AI：无 Provider，无去重/冲突检测；`scan` 只做规则级切分，**语义去重与冲突一律没有**
 - MCP：四个工具（`search` / `get` / `list` / `propose`）。**没有** `memory_status`、**没有** 权限分级（所有客户端都是 Propose 权限）、**没有** HTTP 传输、**没有** 认证
