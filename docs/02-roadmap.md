@@ -116,6 +116,14 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
   3. `--dry-run` 不写任何文件。
   4. 源目录不存在时退出码 0 且不报错。
 
+### P2-03b WorkBuddy 工作区记忆（未做）
+
+发现太晚、当时只适配了一种形态。补记缺口：
+
+- **`user-<uuid>-personal/`**：已补（`IDENTITY.md` / `SOUL.md` / `USER.md` → `profile`；`MEMORY.md` 按 bullet 切 → `auto_memory`）
+- **`<workspace>/.workbuddy/memory/`**：`MEMORY.md` + 按天文件 `YYYY-MM-DD.md`，**未适配**。工作区路径不能从 home 推导，需要用户给根目录（或读 `workspace-state.json`，结构未验证）
+- 注意：WorkBuddy 的 `MEMORY.md` 是**按标题分组的正文**，Claude 的 `MEMORY.md` 是**链接索引**（`- [Title](file.md)`）。**不要共用解析器。**
+
 ### P2-04 Codex 适配器
 
 - **落位**：`src/memoryhub/adapters/codex.py`

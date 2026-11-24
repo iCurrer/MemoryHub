@@ -239,6 +239,57 @@ class WorkBuddyAdapterTests(unittest.TestCase):
         entry = adapter.read(adapter.discover()[0])[0]
         self.assertTrue(entry.created_at.startswith("2026-11-15T07:52:40"))
 
+    # ---------------------------------------------------- persona directory
+
+    def write_persona(self) -> None:
+        persona = self.home / "user-abc123-personal"
+        persona.mkdir(parents=True, exist_ok=True)
+        (persona / "IDENTITY.md").write_text(
+            "# 身份\n\n## 角色\n\n独立开发者，做本地优先工具。\n", encoding="utf-8"
+        )
+        (persona / "USER.md").write_text(
+            "# 用户\n\n## 偏好\n\n- 喜欢先看推理再看代码\n", encoding="utf-8"
+        )
+        (persona / "SOUL.md").write_text("# SOUL\n\n## 风格\n\n- 直接\n", encoding="utf-8")
+        (persona / "MEMORY.md").write_text(
+            "# 长期事实\n\n## 硬约束\n\n- 不自动加依赖\n- 不在公开仓贴绝对路径\n",
+            encoding="utf-8",
+        )
+
+    def test_persona_directory_is_discovered_as_profile(self) -> None:
+        self.write_persona()
+        sources = {s.path.name: s for s in WorkBuddyAdapter(self.home).discover()}
+        self.assertEqual(sources["IDENTITY.md"].source_kind, "profile")
+        self.assertEqual(sources["USER.md"].source_kind, "profile")
+        self.assertEqual(sources["SOUL.md"].source_kind, "profile")
+        self.assertEqual(sources["MEMORY.md"].source_kind, "auto_memory")
+        self.assertEqual(sources["demo_memory.md"].source_kind, "auto_memory")
+
+    def test_persona_files_split_into_sections_and_bullets(self) -> None:
+        self.write_persona()
+        adapter = WorkBuddyAdapter(self.home)
+        by_name = {s.path.name: s for s in adapter.discover()}
+
+        identity = adapter.read(by_name["IDENTITY.md"])
+        self.assertEqual(len(identity), 2)  # title + one section
+        self.assertTrue(all(e.category == "profile" for e in identity))
+        self.assertTrue(all(e.trust == "review" for e in identity))
+        self.assertTrue(all(e.source_hash.startswith("sha256:") for e in identity))
+
+        index = adapter.read(by_name["MEMORY.md"])
+        self.assertEqual(len(index), 2, "persona MEMORY.md is a bullet list of facts")
+        self.assertTrue(all(e.source_kind == "auto_memory" for e in index))
+
+    def test_persona_and_profile_do_not_collide(self) -> None:
+        self.write_persona()
+        adapter = WorkBuddyAdapter(self.home)
+        seen = set()
+        for source in adapter.discover():
+            for entry in adapter.read(source):
+                key = (entry.source_path, entry.body)
+                self.assertNotIn(key, seen)
+                seen.add(key)
+
 
 class ClaudeAdapterTests(unittest.TestCase):
     """Fixtures are built from the documented layout, not from a real install."""

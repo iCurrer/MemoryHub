@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..models import MemoryEntry
-from .base import Adapter, SourcePath, bullets, strip_quoted_metadata
+from .base import Adapter, SourcePath, bullets, sections, strip_quoted_metadata
 
 _STAMP_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
@@ -65,14 +65,21 @@ class WorkBuddyAdapter(Adapter):
     # ------------------------------------------------------------ discover
 
     def discover(self) -> List[SourcePath]:
+        sources: List[SourcePath] = []
+        sources.extend(self._profile_memory())
+        sources.extend(self._persona_files())
+        return sources
+
+    def _profile_memory(self) -> List[SourcePath]:
+        """``memory/<uuid>_memory.md``: one bullet per memory, blockquote header."""
         memory_dir = self.home / "memory"
         if not memory_dir.is_dir():
             return []
-        sources: List[SourcePath] = []
+        found: List[SourcePath] = []
         for path in sorted(memory_dir.glob("*_memory.md")):
             if not path.is_file():
                 continue
-            sources.append(
+            found.append(
                 SourcePath(
                     path=path,
                     adapter=self.name,
@@ -83,12 +90,90 @@ class WorkBuddyAdapter(Adapter):
                     note="single-file user memory profile",
                 )
             )
-        return sources
+        return found
+
+    def _persona_files(self) -> List[SourcePath]:
+        """``user-<uuid>-personal/``: IDENTITY / SOUL / USER / MEMORY.
+
+        This is the part that actually describes the person, so it is imported as
+        ``profile`` rather than as generic auto-memory. ``MEMORY.md`` here is an
+        index-shaped memory file (headings + bullets), not a link index.
+        """
+        found: List[SourcePath] = []
+        for persona_dir in sorted(self.home.glob("user-*-personal")):
+            if not persona_dir.is_dir():
+                continue
+            for name in ("IDENTITY.md", "SOUL.md", "USER.md"):
+                path = persona_dir / name
+                if path.is_file():
+                    found.append(
+                        SourcePath(
+                            path=path,
+                            adapter=self.name,
+                            source_kind="profile",
+                            layer="",
+                            precedence=0,
+                            confidence="high",
+                            note=f"persona:{name}",
+                        )
+                    )
+            index = persona_dir / "MEMORY.md"
+            if index.is_file():
+                found.append(
+                    SourcePath(
+                        path=index,
+                        adapter=self.name,
+                        source_kind="auto_memory",
+                        layer="",
+                        precedence=0,
+                        confidence="high",
+                        note="persona-index",
+                    )
+                )
+        return found
 
     # ---------------------------------------------------------------- read
 
     def read(self, source: SourcePath) -> List[MemoryEntry]:
         text = Path(source.path).read_text(encoding="utf-8", errors="replace")
+        if source.note.startswith("persona:") or source.note == "persona-index":
+            return self._persona_entries(source, text)
+        return self._bullets_entries(source, text)
+
+    # ------------------------------------------------------------ builders
+
+    def _persona_entries(self, source: SourcePath, text: str) -> List[MemoryEntry]:
+        meta, _rest = strip_quoted_metadata(text)
+        created_at = _iso_or_none(meta.get("last updated"))
+        file_hash = source.content_hash()
+        if source.note == "persona-index":
+            pairs = [(section, body) for section, body in bullets(text)]
+        else:
+            pairs = sections(text)
+        entries: List[MemoryEntry] = []
+        for heading, body in pairs:
+            tags = [self.name]
+            slug = _slug(heading)
+            if slug:
+                tags.append(slug)
+            entries.append(
+                MemoryEntry.create(
+                    # Persona facts route to human review via ADR-003.
+                    category="profile",
+                    body=body + "\n",
+                    tags=tags,
+                    source_adapter=self.name,
+                    source_path=source.path.as_posix(),
+                    source_kind=source.source_kind,
+                    source_hash=file_hash,
+                    created_at=created_at,
+                    precedence=source.precedence,
+                    layer=source.layer,
+                )
+            )
+        return entries
+
+    def _bullets_entries(self, source: SourcePath, text: str) -> List[MemoryEntry]:
         meta, rest = strip_quoted_metadata(text)
         created_at = _iso_or_none(meta.get("last updated"))
         file_hash = source.content_hash()

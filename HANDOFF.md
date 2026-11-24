@@ -28,7 +28,7 @@
 | `src/memoryhub/models.py` | `MemoryEntry` 领域模型、三级信任推导、校验、`is_expired`、`precedence`/`layer`、Markdown 序列化 | 稳定，字段已冻结（`project` 分类的信任归属待拍板，见 ADR-010） |
 | `src/memoryhub/frontmatter.py` | PyYAML 解析/序列化：嵌套、多行、块列表、BOM、重复键拒绝 | **稳定**（P2-01 完成） |
 | `src/memoryhub/adapters/base.py` | `Adapter` 协议、`SourcePath`（带 `precedence`/`layer`）、markdown 切分 helper | 稳定（P2-03） |
-| `src/memoryhub/adapters/workbuddy.py` | 首个真实适配器：`~/.workbuddy/memory/*_memory.md` | 稳定（P2-03a），格式依据见 docs/04 |
+| `src/memoryhub/adapters/workbuddy.py` | 两种形态：`memory/<uuid>_memory.md` 与 `user-<uuid>-personal/`（IDENTITY/SOUL/USER/MEMORY） | 稳定（P2-03a），格式依据见 docs/04 §5 |
 | `src/memoryhub/adapters/claude.py` | `CLAUDE.md` 链 + auto memory 适配器 | **按文档实现，未在真机验证**（P2-05，见 roadmap 警告） |
 | `src/memoryhub/mcp/server.py` | 只读 MCP 三件套 + 可见性规则（ADR-012） | 稳定（P5-01 3/5） |
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
@@ -36,7 +36,7 @@
 | `src/memoryhub/cli.py` | 11 个命令 | 稳定，命令会继续增加 |
 | `tests/test_store.py` | 30 个用例 | 会随功能增长 |
 | `tests/test_cli.py` | 19 个端到端用例 | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
-| `tests/test_adapters.py` | 22 个用例 | 协议三条判据 + WorkBuddy 解析 + Claude 适配器 |
+| `tests/test_adapters.py` | 25 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude 适配器 |
 | `tests/test_mcp.py` | 9 个用例 | 可见性规则 + 真实 stdio 握手（含 stdout 纯净性断言） |
 
 可用命令：`init` `doctor` `new` `scan` `mcp` `list` `show` `search` `approve` `reject` `stats`
@@ -60,7 +60,7 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 79 passed
+python -m unittest discover -s tests -v          # 期望 82 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 7 个目录
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -73,7 +73,7 @@ python -m memoryhub mcp --vault /tmp/v            # 阻塞，等 MCP 客户端�
 
 ## 5. 未实现（不要以为已有）
 
-- 采集：**两个** —— WorkBuddy（`auto_memory`）与 Claude Code（`instruction` 链 + `auto_memory`）。**Claude 适配器未经真机验证**（本机未装）。Codex（指令链 + sqlite + zstd）、Cursor（`.mdc`）、Trae 都没有
+- 采集：**两个适配器**。WorkBuddy 覆盖两种形态（`memory/*_memory.md`、`user-*-personal/`），**工作区级 `<workspace>/.workbuddy/memory/` 未做（P2-03b）**；Claude Code 覆盖 `CLAUDE.md` 链 + auto memory，**未经真机验证**。Codex / Cursor / Trae 都没有
 - 监控：无 Watchdog，改动来源文件不会被发现，`scan` 要手动跑
 - 索引：无 SQLite，`search` 是遍历目录（400 条约 114ms，可接受）
 - AI：无 Provider，无去重/冲突检测；`scan` 只做规则级切分，**语义去重与冲突一律没有**
@@ -147,3 +147,4 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 - 策划书（`docs/reference/`）是历史输入，不是需求来源。有疑问查 `docs/03-plan-review.md` 的对照表。
 - CLI 测试用 `MEMORYHUB_HOME` 隔离配置目录，别让它读到真实 `~/.memoryhub`。
 - 测试需要 `pyyaml`。`AGENTS.md` 里"无第三方包也能跑通"这句话对阶段 2 已不成立，见 ADR-005 与已知问题 #8。
+- **"Claude" 是两个产品**：Desktop（应用，`%LOCALAPPDATA%\Claude-Data`）与 Code（CLI，`~/.claude`）。本机只装了 Desktop。查上游来源时**不要只看一个路径就下结论** —— 我犯过这个错，见 `docs/04-upstream-formats.md` §3.0。

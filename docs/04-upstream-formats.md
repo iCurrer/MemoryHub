@@ -20,12 +20,15 @@
 | 工具 | 指令层 | 记忆层 | 格式 | 置信度 |
 |---|---|---|---|---|
 | Codex | `$CODEX_HOME/AGENTS.md`（默认 `~/.codex`）+ 项目目录链 | `~/.codex/memories_1.sqlite`、`~/.codex/sessions/**/rollout-*.jsonl.zst` | Markdown / **SQLite** / JSONL+zstd | 实盘 + 镜像 |
-| Claude Code | `~/.claude/CLAUDE.md`、`./CLAUDE.md`、`./CLAUDE.local.md`、`.claude/rules/*.md` | `~/.claude/projects/<project>/memory/`（`MEMORY.md` + 主题文件） | Markdown（记忆带 YAML frontmatter） | 官方 |
+| Claude Code（CLI） | `~/.claude/CLAUDE.md`、`./CLAUDE.md`、`./CLAUDE.local.md`、`.claude/rules/*.md` | `~/.claude/projects/<project>/memory/`（`MEMORY.md` + 主题文件） | Markdown（记忆带 YAML frontmatter） | 官方 |
+| Claude Desktop（应用） | 未见落盘文件 | 运行期由系统提示定义；本机**未找到** `MEMORY.md` | Markdown（`MEMORY.md` + 主题文件，同 Code） | 实盘（目录）+ 实盘技能（格式） |
 | Cursor | `.cursor/rules/*.mdc`（**只认 `.mdc`**）、用户级 / 团队级规则、`AGENTS.md` | 无独立记忆层 | Markdown + frontmatter | 官方 |
-| WorkBuddy | 未见（未验证） | `~/.workbuddy/memory/<uuid>_memory.md`（+ `.bak`） | Markdown，**无 frontmatter** | 实盘 |
+| WorkBuddy | 未见（未验证） | 三种形态：`memory/<uuid>_memory.md`、`user-<uuid>-personal/`、`<workspace>/.workbuddy/memory/` | Markdown，**无 frontmatter** | 实盘 |
 | Trae CN | `~/.trae-cn/skills/`（未验证是否算指令层） | `~/.trae-cn/memory/` 三层 | Markdown + **JSONL** | 实盘 |
 
 **一句话**：`AGENTS.md` 是**指令**，不是记忆。把两者混为一谈，是本项目最容易犯的第二个设计错误（第一个是回写分发，见 ADR-002）。
+
+> **注意 "Claude" 是两个产品**：Claude **Desktop**（Electron 应用，`%LOCALAPPDATA%\Claude-Data\`）与 Claude **Code**（CLI，`~/.claude` + `claude` 命令）。本机只装了前者。把两者混为一谈会导致适配器扫错目录、静默 0 条 —— 详见 §3.0。
 
 ---
 
@@ -78,6 +81,30 @@ consolidation_progress(singleton, max_thread_count)
 ## 3. Claude Code（官方）
 
 来源：<https://code.claude.com/docs/en/memory>
+
+### 3.0 先分清：Claude Desktop 与 Claude Code 是两个产品（实盘）
+
+| | Claude Desktop（应用） | Claude Code（CLI） |
+|---|---|---|
+| 本机装了吗 | **装了** | **没装** |
+| 证据 | `%LOCALAPPDATA%\Claude-Data\`（67 MB，Electron：`blob_storage`/`IndexedDB`/`Local Storage`），其中含 `claude-code-sessions/` 与 `local-agent-mode-sessions/` | 无 `~/.claude`，`where claude` 无结果，注册表无卸载项 |
+| 读 `CLAUDE.md` 吗 | 未见落盘指令文件 | 是（§3.1） |
+| 记忆在哪 | 运行期由系统提示定义；本机**没有找到** `MEMORY.md` | `~/.claude/projects/<project>/memory/`（§3.3） |
+
+**Desktop 应用自带两个与记忆直接相关的技能**（实盘，随应用下发，路径
+`local-agent-mode-sessions\skills-plugin\...\skills\`）：
+
+- `consolidate-memory` — 描述是 `Reflective pass over your memory files — merge duplicates, fix stale facts, prune the index`
+- `import-memory` — `Import a memory export from another AI assistant into Claude's memory`
+
+`consolidate-memory` 的正文（实盘读到的原文）确认了它的记忆结构：
+
+- 一个**记忆目录** + **`MEMORY.md` 索引** + **主题文件**；
+- 索引格式：`- [Title](file.md) — one-line hook`，上限 **200 行 / ~25KB**，一行一条；
+- 记忆分**durable**（偏好、工作风格、关键关系、重复流程）与 **dated**（具体项目、截止日期、一次性任务），过期的要 retire 或把结论折进 durable；
+- 要求把 "next week / this quarter" **换成绝对日期**。
+
+> **战略含义（重要）**：Anthropic 已把"去重 / 修过期 / 剪索引"做成**提示词技能**，靠模型自觉执行，没有数据层、没有来源留痕、没有可审计的裁决记录。这既验证了 MemoryHub 的定位，也是最直接的同质化风险：如果用户认为"让模型整理一下"就够了，就不会为本工具付费或自用。**我们的差别必须落在"可审计 + 可回滚 + 跨工具"上，而不是"我也会整理"。**
 
 ### 3.1 指令层，按加载顺序（范围从宽到窄）
 
@@ -151,9 +178,17 @@ consolidation_progress(singleton, max_thread_count)
 
 ## 5. WorkBuddy（实盘，无官方文档）
 
-本机样本：`~/.workbuddy/memory/<profile-uuid>_memory.md`（8.7 KB，同目录另有 `.bak`，15 KB）。
+**三种形态，别只看到一个。** 最早只发现了第 1 种，第 2 种才是真正描述「这个人」的：
+
+| # | 路径 | 内容 | 已适配 |
+|---|---|---|---|
+| 1 | `~/.workbuddy/memory/<profile-uuid>_memory.md`（+ `.bak`） | `# User Memory Profile` + 块引用元数据 + bullet 列表 | ✅ `auto_memory` |
+| 2 | `~/.workbuddy/user-<uuid>-personal/` | `IDENTITY.md` / `SOUL.md` / `USER.md` / `MEMORY.md` / `workspace-state.json` | ✅ 前三个 `profile`，`MEMORY.md` 按 bullet 切 |
+| 3 | `<workspace>/.workbuddy/memory/` | `MEMORY.md`（按标题组织的长期事实）+ 按天文件 `YYYY-MM-DD.md` | ❌ **未实现**（P2-03b） |
 
 > 公开仓脱敏：真实 `<profile-uuid>` 已替换为占位符，它是本机 WorkBuddy 配置目录的稳定标识符，不应随仓库公开。
+
+### 5.1 `memory/<uuid>_memory.md`
 
 结构（8.7 KB / 33 行 / 2 个标题 / 7 条 bullet）：
 
@@ -172,7 +207,20 @@ consolidation_progress(singleton, max_thread_count)
 - `Version` 单调递增 → 上游自己维护版本号，和 Git 的版本历史语义**重叠**。
 - 一个 `<uuid>_memory.md` 疑似"一个用户/工作区一份"，文件名是 uuid 而不是可读标识。
 
-> 未验证：`<uuid>` 代表用户还是工作区；`## Memory Block` 内部有无固定子结构。
+### 5.2 `user-<uuid>-personal/`（人格目录）
+
+- `IDENTITY.md`（683 B）/ `SOUL.md`（1.8 KB）/ `USER.md`（2.4 KB）：标题 + 段落，描述身份、风格、偏好。
+- `MEMORY.md`（1.7 KB / 26 行 / 5 个标题 / 17 条 bullet）：标题是 `关于这个人的事实` / `长期记忆` / `硬约束` / `元规则`，**没有 markdown 链接**，所以它不是"指针索引"，而是**按标题分组的记忆正文**。
+- 与 §3.0 里 Claude 的 `MEMORY.md` 不同：Claude 的是链接索引（`- [Title](file.md)`），WorkBuddy 这个不是。**不要用同一套解析器想当然处理两者。**
+
+### 5.3 `<workspace>/.workbuddy/memory/`（未实现）
+
+- `MEMORY.md`（6 KB / 90 行 / 5 个标题 / 29 条 bullet）：项目级长期事实，标题如 `Notion 是唯一事实源`、`字段约定`、`专家分工`。
+- 同目录的 `2026-08-31.md`（5.6 KB）、`2026-09-01.md`（1.7 KB）：**按天**的会话沉淀。
+
+未实现的原因：工作区路径不是从 home 推出来的，必须由用户给出根目录（或从 `workspace-state.json` 读，尚未验证其结构）。见 P2-03b。
+
+> 未验证：`<uuid>` 代表用户还是工作区；`workspace-state.json` 是否含工作区路径列表。
 
 ---
 
@@ -238,13 +286,15 @@ Codex 是"近的覆盖远的"，Claude 是"层级拼接 + local 在后"，Cursor
 
 | # | 项 | 状态 |
 |---|---|---|
-| 1 | Claude Code 的 `<project>` 目录命名规则 | 只有官方文字描述，本机**未安装**（无 `~/.claude`），无实例 |
+| 1 | Claude Code 的 `<project>` 目录命名规则 | 官方只有文字描述；本机**未安装 Claude Code**（无 `~/.claude`），无实例 |
 | 2 | WorkBuddy 的 `<uuid>` 是用户还是工作区 | uuid 且与 `.workbuddy/<uuid>/` 同名，疑似工作区；无官方文档 |
-| 3 | WorkBuddy 是否还有别的记忆载体 | 未全盘搜索 |
+| 3 | WorkBuddy 是否还有别的记忆载体 | 已找到三种（§5），**是否还有第四种未知**；`workspace-state.json`（190 B）结构未验证 |
 | 4 | Codex `project_doc_max_bytes` 等默认值 | 来自镜像，非官方页 |
 | 5 | Codex `memories_1.sqlite` 的实际行数据形状 | 本机 0 行 |
 | 6 | Trae 国际版是否同布局 | 只看 CN 版 |
 | 7 | Cursor User Rules / Team Rules 是否落盘 | 官方只说是环境级/面板级 |
+| 8 | Claude Desktop 的 auto-memory 目录到底在哪 | 应用装了（`%LOCALAPPDATA%\Claude-Data`），但本机**搜不到任何 `MEMORY.md`**；技能正文说"目录由系统提示定义"，即运行期才知道。可能在 `IndexedDB`/`Local Storage` 或云端 |
+| 9 | Claude Desktop 的 MCP 配置写在哪 | `%APPDATA%\Claude\claude_desktop_config.json` **不存在**（README 提到 `%APPDATA%\Claude` 是旧版本残留路径）；新位置未定位 |
 
 ## 9. 怎么复核（复制即用）
 
