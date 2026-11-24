@@ -160,7 +160,9 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
   3. `MEMORY.md` 不被当作记忆导入。
   4. 指令条目 `source_kind=instruction`、`category=decision` → `trust=review`，且带 `source_hash`。
 
-> **⚠️ 验证状态**：本机**未安装 Claude Code**（无 `~/.claude`），本适配器完全按官方文档的形状实现，测试用合成样本。**没有在真实安装上验证过。** 首次在真机使用前请重跑 `docs/04-upstream-formats.md` §9，并核对 §8 未验证清单第 1 项。
+> **验证状态（2026-11-24 更新）**：CLI v2.1.331 装好后复验 —— **指令层已真机验证**：`~/.claude/CLAUDE.md`（2 节）与项目 `./CLAUDE.md`（4 节）分别以 global/0、project/10 入队。
+>
+> **auto memory 层仍未验证**：`projects/<project>/memory/` 目录存在但为空（未 `/login`，无法触发写入）。`type` / `modified` 的映射仍只有官方文档支撑，首次产生真实记忆文件后请复核 `docs/04` §3.3。
 
 ### P2-06 文件监控 + 防抖 + 哈希去重
 

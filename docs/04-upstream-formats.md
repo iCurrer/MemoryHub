@@ -98,10 +98,10 @@ consolidation_progress(singleton, max_thread_count)
 
 | | Claude Desktop（应用） | Claude Code（CLI） |
 |---|---|---|
-| 本机装了吗 | **装了** | **没装** |
-| 证据 | `%LOCALAPPDATA%\Claude-Data\`（67 MB，Electron：`blob_storage`/`IndexedDB`/`Local Storage`），其中含 `claude-code-sessions/` 与 `local-agent-mode-sessions/` | 无 `~/.claude`，`where claude` 无结果，注册表无卸载项 |
-| 读 `CLAUDE.md` 吗 | 未见落盘指令文件 | 是（§3.1） |
-| 记忆在哪 | 运行期由系统提示定义；本机**没有找到** `MEMORY.md` | `~/.claude/projects/<project>/memory/`（§3.3） |
+| 本机装了吗 | **装了** | **装了**（2026-11-24 补装，CLI v2.1.331，`%APPDATA%\npm\claude.cmd`） |
+| 证据 | `%LOCALAPPDATA%\Claude-Data\`（Electron：`blob_storage`/`IndexedDB`/`Local Storage`），含 `claude-code-sessions/` 与 `local-agent-mode-sessions/` | `~/.claude/`：`CLAUDE.md`(337 B)、`projects/`、`sessions/`、`settings.json`、`~/.claude.json` |
+| 读 `CLAUDE.md` 吗 | 未见落盘指令文件 | **是，已实测**：`~/.claude/CLAUDE.md` 被适配器扫到（global/0） |
+| 记忆在哪 | 运行期由系统提示定义；本机**没有找到** `MEMORY.md` | `~/.claude/projects/<project>/memory/`（**目录已实测存在，内容为空**） |
 
 **Desktop 应用自带两个与记忆直接相关的技能**（实盘，随应用下发，路径
 `local-agent-mode-sessions\skills-plugin\...\skills\`）：
@@ -148,7 +148,13 @@ consolidation_progress(singleton, max_thread_count)
 
 ### 3.3 auto memory：字段几乎与我们同构（官方）
 
-> **实现状态**：`adapters/claude.py` 已按本节实现（P2-05）。但**本机未安装 Claude Code，未经真实样本验证** —— 首次在真机使用前请重跑 §9，并复核 §8 第 1 项。
+> **实现状态（2026-11-24 更新）**：CLI v2.1.331 已装，**指令层已真机验证** ——
+> `~/.claude/CLAUDE.md`（337 B，无 frontmatter，`# 用户信息` / `# 用户偏好` 两节）被扫为 layer=global/precedence=0；
+> 项目 `./CLAUDE.md` 为 layer=project/precedence=10。
+>
+> **auto memory 仍未验证**：`projects/<project>/memory/` 目录确实按文档路径自动创建，
+> 但**内容为空**（本机未 `claude /login`，无法让它真写一次记忆）。`type` / `modified`
+> 两个字段目前只有官方文档支撑。见 §8 第 1 条。
 
 目录：`~/.claude/projects/<project>/memory/`，`<project>` 由 git 仓库派生（同一 repo 的 worktree 共享一个目录）；可用 `autoMemoryDirectory` 覆盖；`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` 关闭。
 
@@ -166,6 +172,8 @@ consolidation_progress(singleton, max_thread_count)
 - 机器本地，不跨设备同步；不受 `cleanupPeriodDays` 清理影响。
 
 > 对 MemoryHub 的含义：`type` ↔ 我们的 `category`、`modified` ↔ `updated_at` 可直接映射。这是**目前最容易做对**的适配器。
+>
+> **补充实测**：`<project>` 按**工作目录**派生，不是按 git 仓 —— 在 `%TEMP%\claudetest` 跑一次 `claude`，立刻多出 `projects\C--Users-...-claudetest\memory\`。项目目录会不断增殖。
 
 ---
 
