@@ -264,6 +264,21 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Serve the read-only MCP tools over stdio.
+
+    Imported lazily: the SDK pulls in a handful of packages, and the rest of the
+    CLI should not pay for them (nor fail if they are missing).
+    """
+    try:
+        from .mcp import serve
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        print(f"error: the MCP server needs the `mcp` package: {exc}", file=sys.stderr)
+        return 1
+    serve(getattr(args, "vault", None))
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
     entries, errors = store.scan()
@@ -416,6 +431,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="report what would be imported without writing anything",
     )
     p_scan.set_defaults(func=cmd_scan)
+
+    p_mcp = sub.add_parser(
+        "mcp",
+        parents=[vault_arg],
+        help="serve the read-only MCP tools over stdio (for Cursor / Claude Desktop)",
+    )
+    p_mcp.set_defaults(func=cmd_mcp)
 
     p_list = sub.add_parser("list", parents=[vault_arg], help="list memories")
     p_list.add_argument("--status", choices=STATUSES, default=None)

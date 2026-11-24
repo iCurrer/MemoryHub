@@ -201,6 +201,14 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 | P5-03 | 敏感信息检测与排除规则 | 明显密钥被阻断，`doctor` 有对应检查 |
 | P5-04 | `memoryhub backup`：本地 commit + 可选远端 | 远端不可用时本地提交成功、任务进重试 |
 
+**P5-01 进度：3/5 完成（2026-11-24）**
+
+- ✅ `memory_search` / `memory_get` / `memory_list`，`memoryhub mcp` 启动 stdio 服务
+- ✅ 可见性规则见 ADR-012：`search`/`list` 只见 `approved` 且未过期；`get` 可查任意状态并如实标注
+- ✅ 每条结果带 provenance 与 validity
+- ✅ 集成测试用真 subprocess 跑完整握手，断言 stdout 只有 JSON-RPC
+- ⬜ `memory_propose` / `memory_status` —— 等 P5-02 的权限分级，否则等于开放无审核写入
+
 ---
 
 ## 阶段 6 · 产品化

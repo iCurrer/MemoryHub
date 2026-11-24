@@ -7,7 +7,12 @@ requires-python = ">=3.11"
 license = { text = "TBD" }
 # First runtime dependency. ADR-005 kept phase 1 stdlib-only to prove the data
 # model; the migration to PyYAML is recorded there as a partial supersession.
-dependencies = ["pyyaml>=6.0"]
+# `mcp` is the largest one: it drags in pydantic/starlette/uvicorn, of which the
+# HTTP servers are unused (stdio only). See ADR-012 for the review point.
+dependencies = [
+    "pyyaml>=6.0",
+    "mcp>=2.0,<3",
+]
 
 [project.scripts]
 memoryhub = "memoryhub.cli:main"

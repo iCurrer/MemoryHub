@@ -45,10 +45,12 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - 时效裁决：`valid_until` 已过期的条目默认不出现在 `list` / `search` 里（`--include-expired` 打开）
 - 读不了的 `.md` 不会被静默跳过：`list` / `search` 告警，`stats` 计数，`doctor` 判 FAIL
 - **采集**：`scan` 从 WorkBuddy（`~/.workbuddy/memory/`）读入待审条目，按内容指纹去重、可 `--dry-run`
-- CLI：`init` `doctor` `new` `scan` `list` `show` `search` `approve` `reject` `stats`
-- 62 个单元测试（含 19 个 CLI 端到端用例），全部通过
+- **MCP 只读入口**：`memoryhub mcp` 起 stdio 服务，`memory_search` / `memory_get` / `memory_list`
+  三个工具，每条结果带来源与有效期；只暴露已批准且未过期的条目
+- CLI：`init` `doctor` `new` `scan` `mcp` `list` `show` `search` `approve` `reject` `stats`
+- 71 个单元测试（含 19 个 CLI 端到端 + 1 个真实 stdio 握手），全部通过
 
-> **依赖**：只有 `pyyaml`。阶段 1 曾零依赖，P2-01 为支持完整 YAML 引入（理由见 ADR-005）。
+> **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖，P2-01 / P5-01 为真 YAML 与 MCP 引入（代价见 ADR-005、ADR-012）。
 
 ## 快速开始
 
@@ -109,7 +111,7 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 | 2 | 采集适配器（WorkBuddy 已通；Codex / Claude Code / Trae 待做）、文件监控、哈希去重、SQLite FTS5 索引（trigram） | **P2-01 / P2-03 / P2-03a 完成**，其余未开始 |
 | 3 | AI 整理（仅产出提案）、冲突检测、Pydantic 校验 | 未开始 |
 | 4 | 审核流 + 差异预览（CLI） | 未开始 |
-| 5 | MCP stdio（只读 + propose）、Git 自动备份 | 未开始 |
+| 5 | MCP stdio（只读 search/get/list 已通；propose/status 待权限分级）、Git 自动备份 | **P5-01 部分完成** |
 | 6 | 打包（PyInstaller）、开机常驻、基础 Web UI | 未开始 |
 
 ## 明确不做
