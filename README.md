@@ -79,6 +79,10 @@ memoryhub doctor
 
 ```
 D:/project/MemoryHub        代码（本仓库，可开源）
+  src/memoryhub/            实现
+  tests/                    单元测试
+  docs/                     定位、决策、路线、策划书
+  tools/                    一次性转换脚本
 D:/my-memory                你的记忆（独立私有仓，绝不进本仓库）
   vault/                    正式记忆，按分类分目录
   inbox/pending/            待审提案
@@ -111,8 +115,16 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 
 待定（倾向 Apache-2.0：含专利授权，便于被其他工具集成）。在确定之前请勿分发。
 
-## 相关文档
+## 文档索引
 
-- [`AGENTS.md`](AGENTS.md) —— 工程契约，AI 编程 Agent 必读
-- [`docs/00-positioning.md`](docs/00-positioning.md) —— 定位与差异化
-- [`docs/01-decisions.md`](docs/01-decisions.md) —— 架构决策记录
+| 文件 | 内容 |
+|---|---|
+| [`AGENTS.md`](AGENTS.md) | 工程契约：7 条不可推翻的决策、编码约定、明确禁止。**AI Agent 必读** |
+| [`HANDOFF.md`](HANDOFF.md) | 现状交接：做到哪、怎么跑、已知问题、下一步 |
+| [`docs/00-positioning.md`](docs/00-positioning.md) | 定位与竞品差异 |
+| [`docs/01-decisions.md`](docs/01-decisions.md) | 8 条 ADR，含每条决策的代价与复审时点 |
+| [`docs/02-roadmap.md`](docs/02-roadmap.md) | 阶段拆解与可领工单 |
+| [`docs/03-plan-review.md`](docs/03-plan-review.md) | 策划书 ↔ 当前决定的对照表（防止做回已否决功能） |
+| [`docs/reference/`](docs/reference/) | 项目策划书原文与可读版，只读 |
+
+用 Claude Code / Cursor 接手时，`CLAUDE.md` 与 `.cursor/rules/project.mdc` 会指向上面的入口。

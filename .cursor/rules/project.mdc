@@ -1,0 +1,35 @@
+---
+description: MemoryHub 工程契约指针（规则以 AGENTS.md 为唯一来源）
+alwaysApply: true
+---
+
+# MemoryHub
+
+工程契约唯一来源：`AGENTS.md`。动手前完整阅读，本规则不重复其内容。
+
+## 必读顺序
+
+1. `AGENTS.md` —— 7 条不可推翻的决策、编码约定、明确禁止
+2. `HANDOFF.md` —— 当前进度、怎么跑、已知问题、下一步
+3. `docs/02-roadmap.md` —— 领一个工单，按编号顺序
+
+## 三条最容易踩的红线
+
+- 不实现"把中央记忆写回其他 AI 工具"（ADR-002，策划书原方案已否决）
+- AI 产出只能进 `inbox/` 且 `status=pending`，绝不直接落 `vault/`（ADR-003）
+- `vault/` 不进本仓库（ADR-007）
+
+## 验收
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+PYTHONPATH=src python -m memoryhub doctor
+```
+
+两项全绿才算完成。新增功能必须补测试；只加功能不加测试视为未完成。
+
+## 不要做
+
+- 不要引入图数据库 / 向量库 / ORM
+- 不要读 `docs/reference/plan-v0.1.md` 当需求，它是历史输入；需求以 ADR 为准
+- 不要在没有 ADR 的情况下改动 `models.py` 的字段语义

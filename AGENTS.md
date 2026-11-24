@@ -13,6 +13,27 @@ MemoryHub 是**跨 AI 工具的个人记忆治理层**：采集各 AI 工具的�
 阶段 1（核心数据层）已完成骨架：记忆模型、frontmatter 读写、原子写入、CLI 基础命令、单元测试。
 阶段 2 及以后尚未实现，**不得在 README 或文档中声称已实现**。
 
+## 上手顺序（AI Agent 必读）
+
+1. **本文件** —— 契约优先于一切
+2. [`HANDOFF.md`](HANDOFF.md) —— 做到哪一步、怎么跑、已知问题、下一步
+3. [`docs/02-roadmap.md`](docs/02-roadmap.md) —— 领一个工单，按编号顺序执行
+4. [`docs/01-decisions.md`](docs/01-decisions.md) —— 想推翻决策前先看代价与复审时点
+5. [`docs/03-plan-review.md`](docs/03-plan-review.md) —— 策划书里哪些方案已被否决
+
+**文档地图**
+
+| 文件 | 作用 | 谁维护 |
+|---|---|---|
+| `AGENTS.md` | 工程契约，规则唯一来源 | 项目所有者 |
+| `HANDOFF.md` | 现状交接，每次提交后更新 | 当次改动人 |
+| `CLAUDE.md` / `.cursor/rules/` | 只做导航指针，不重复规则 | 项目所有者 |
+| `docs/00-positioning.md` | 定位与竞品差异 | 项目所有者 |
+| `docs/01-decisions.md` | ADR 决策记录 | 当次改动人追加 |
+| `docs/02-roadmap.md` | 工单与阶段门禁 | 当次改动人勾销 |
+| `docs/03-plan-review.md` | 策划书 ↔ 决定的对照表 | 决策变更时更新 |
+| `docs/reference/` | 策划书原文与转换版，**只读** | 不收改动 |
+
 ## 已定决策（不可推翻，改了要先写 ADR）
 
 1. **不做回写分发。** 不向 Codex / Claude / Cursor 的原生记忆文件写入任何内容。只读采集 + 单向生成只读快照。理由见 `docs/01-decisions.md` ADR-002。
