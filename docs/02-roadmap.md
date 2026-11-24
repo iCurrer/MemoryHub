@@ -131,20 +131,26 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
   3. 超过 `project_doc_max_bytes` 时，明确报"已截断"而不是静默少内容。
   4. 路径不存在时给出可操作提示（而不是 traceback）。
 
-### P2-05 Claude Code 适配器
+### P2-05 Claude Code 适配器 ✅
 
 - **落位**：`src/memoryhub/adapters/claude.py`
 - **依赖**：P2-03、ADR-011
 - **要点**（按 [`04-upstream-formats.md`](04-upstream-formats.md) §3）：
-  - 指令层：`~/.claude/CLAUDE.md`、`./CLAUDE.md`、`./.claude/CLAUDE.md`、`./CLAUDE.local.md`、`.claude/rules/*.md`（可带 `paths:` frontmatter）
-  - 记忆层：`~/.claude/projects/<project>/memory/`，`MEMORY.md` 是索引，主题文件是单条记忆
-  - **映射已有元数据**：frontmatter 的 `type`（`user`/`feedback`/`project`/`reference`）→ `category`，`modified` → `updated_at`，不要丢弃
-  - **不要假设 `AGENTS.md` 生效**：默认 `claude-md-or-agents-md` 下，有 `CLAUDE.md` 就不读 `AGENTS.md`
-  - 路径不硬编码，启动时探测 → 让用户确认 → 记住配置；版本差异降级为"用户手动指定路径"而不是报错退出
-- **完成判据**：
-  1. 路径不存在时给出可操作提示（而不是 traceback）；路径存在时与 P2-04 同标准。
-  2. 给定一个 `memory/` 目录（`MEMORY.md` + 2 个带 `type` 的主题文件），能产出 2 条 `source_kind=auto_memory` 的 pending 条目，`category` 与 `updated_at` 来自 frontmatter 而不是默认值。
-  3. `MEMORY.md` 的 200 行 / 25KB 加载上限被如实反映（超出部分标为未加载，不假装读到了）。
+  - 指令层：`~/.claude/CLAUDE.md`（global）/ `./CLAUDE.md` 或 `./.claude/CLAUDE.md`（project）/ `./CLAUDE.local.md`（local）/ `.claude/rules/**/*.md`，`layer` 与 `precedence` 如实记录
+  - 记忆层：`~/.claude/projects/<project>/memory/*.md`；**`MEMORY.md` 是索引，跳过**（否则每条记忆进两遍）
+  - `type` → `category`：`user`→`profile`、`feedback`→`preference`、`project`→`project`、`reference`→`knowledge`；`modified` → `created_at`
+  - **不假设 `AGENTS.md` 生效**：默认 `claude-md-or-agents-md` 下，有 `CLAUDE.md` 就不读 `AGENTS.md`
+- **实际落地**：
+  - `CLAUDE_HOME` / `CLAUDE_PROJECT_ROOT` 可覆盖，默认 `~/.claude` 与 cwd（在仓库里跑 `scan` 会导入该仓库的 `CLAUDE.md`，这是正确行为，但测试必须隔离）
+  - 指令按 1-2 级标题切段，**代码围栏内的 `#` 不算标题**；中文标题的 slug 保留 CJK
+  - 超过 4 MiB 的指令文件跳过并告警（Claude 自己也跳过）
+- **完成判据**（全部达成）：
+  1. 路径不存在时不报错、不 traceback。
+  2. `type=feedback` + `modified` 的记忆文件 → `category=preference`、`created_at` 取自 `modified`、`source_kind=auto_memory`。
+  3. `MEMORY.md` 不被当作记忆导入。
+  4. 指令条目 `source_kind=instruction`、`category=decision` → `trust=review`，且带 `source_hash`。
+
+> **⚠️ 验证状态**：本机**未安装 Claude Code**（无 `~/.claude`），本适配器完全按官方文档的形状实现，测试用合成样本。**没有在真实安装上验证过。** 首次在真机使用前请重跑 `docs/04-upstream-formats.md` §9，并核对 §8 未验证清单第 1 项。
 
 ### P2-06 文件监控 + 防抖 + 哈希去重
 

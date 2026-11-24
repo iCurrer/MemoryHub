@@ -250,7 +250,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 if not args.dry_run:
                     store.create(entry)
                 seen.add(fingerprint)
-            print(f"  {source.path.name}: {fresh} new, {duplicate} already present")
+            print(f"  {source.label()}: {fresh} new, {duplicate} already present")
 
     print()
     print(f"sources   {sources}")

@@ -44,6 +44,10 @@ class SourcePath:
                 digest.update(chunk)
         return "sha256:" + digest.hexdigest()
 
+    def label(self) -> str:
+        """Short, disambiguated name for CLI output (``CLAUDE.md [project]``)."""
+        return f"{Path(self.path).name} [{self.layer}]" if self.layer else Path(self.path).name
+
 
 class Adapter(ABC):
     """Base class: subclasses declare a name, a default source_kind, and two methods."""
@@ -69,6 +73,44 @@ class Adapter(ABC):
             "can_read": self.can_read,
             "can_write": self.can_write,
         }
+
+
+def sections(text: str) -> List[Tuple[str, str]]:
+    """Split markdown into ``(heading, body)`` pairs at level 1-2 headings.
+
+    Headings inside fenced code blocks are ignored: instruction files routinely
+    contain ```bash blocks whose `#` lines would otherwise shred the document.
+    The heading is kept as the first line of the body so a memory reads as
+    "## Non-goals / 不做 X" instead of a context-free fragment.
+    """
+    found: List[Tuple[str, str]] = []
+    heading = ""
+    buffer: List[str] = []
+    in_fence = False
+
+    def flush() -> None:
+        nonlocal buffer
+        chunk = "\n".join(buffer).strip()
+        if chunk:
+            found.append((heading, chunk))
+        buffer = []
+
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            if buffer or heading:
+                buffer.append(line)
+            continue
+        if not in_fence and line.startswith("#") and len(line) - len(line.lstrip("#")) <= 2:
+            flush()
+            heading = line.lstrip("#").strip()
+            buffer = [line]
+            continue
+        if buffer or heading:
+            buffer.append(line)
+    flush()
+    return found
 
 
 # ------------------------------------------------------------------ helpers

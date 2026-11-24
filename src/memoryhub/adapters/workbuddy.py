@@ -24,7 +24,7 @@ _STAMP_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?"
 )
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_SLUG_RE = re.compile(r"[^\w]+", re.UNICODE)
 
 
 def _slug(text: str) -> str:

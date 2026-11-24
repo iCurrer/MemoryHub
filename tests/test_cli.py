@@ -37,6 +37,10 @@ class CliTests(unittest.TestCase):
         env = {
             "MEMORYHUB_HOME": str(self.home),
             "WORKBUDDY_HOME": str(self.workbuddy),
+            # Isolate the Claude adapter too: without these it would scan the
+            # repository this test runs from and import its own CLAUDE.md.
+            "CLAUDE_HOME": str(self.base / "claude-home"),
+            "CLAUDE_PROJECT_ROOT": str(self.base / "claude-project"),
         }
         with mock.patch.dict(os.environ, env, clear=False):
             os.environ.pop("MEMORYHUB_VAULT", None)

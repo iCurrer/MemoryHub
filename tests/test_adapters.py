@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from memoryhub.adapters import build, names  # noqa: E402
 from memoryhub.adapters.base import Adapter, SourcePath, bullets  # noqa: E402
+from memoryhub.adapters.claude import ClaudeAdapter  # noqa: E402
 from memoryhub.adapters.workbuddy import WorkBuddyAdapter  # noqa: E402
 from memoryhub.models import MemoryEntry  # noqa: E402
 from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
@@ -237,6 +238,125 @@ class WorkBuddyAdapterTests(unittest.TestCase):
         adapter = WorkBuddyAdapter(self.home)
         entry = adapter.read(adapter.discover()[0])[0]
         self.assertTrue(entry.created_at.startswith("2026-11-15T07:52:40"))
+
+
+class ClaudeAdapterTests(unittest.TestCase):
+    """Fixtures are built from the documented layout, not from a real install."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.home = self.root / "claude-home"
+        self.project = self.root / "project"
+        (self.project / ".claude" / "rules").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def write(self, relative: str, text: str) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def adapter(self) -> ClaudeAdapter:
+        return ClaudeAdapter(home=self.home, project_root=self.project)
+
+    def test_discover_covers_user_project_and_local_layers(self) -> None:
+        self.write("claude-home/CLAUDE.md", "# User\n> prefers pnpm\n")
+        self.write("claude-home/rules/preferences.md", "- use tabs\n")
+        self.write("project/CLAUDE.md", "# Project\n\n## Rules\n\n- run tests\n")
+        self.write("project/.claude/rules/testing.md", "---\npaths: [\"**/*.py\"]\n---\n- pytest\n")
+        self.write("project/CLAUDE.local.md", "- local sandbox url\n")
+
+        sources = self.adapter().discover()
+        layers = [(s.layer, s.precedence) for s in sources]
+        self.assertEqual(
+            layers,
+            [
+                ("global", 0),
+                ("global", 1),
+                ("project", 10),
+                ("project", 11),
+                ("local", 20),
+            ],
+        )
+        self.assertTrue(all(s.source_kind == "instruction" for s in sources))
+
+    def test_project_claude_dir_is_used_when_root_file_is_absent(self) -> None:
+        self.write("project/.claude/CLAUDE.md", "## Only here\n\n- x\n")
+        sources = [s for s in self.adapter().discover() if s.layer == "project"]
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].path.name, "CLAUDE.md")
+
+    def test_missing_everything_is_not_an_error(self) -> None:
+        self.assertEqual(self.adapter().discover(), [])
+
+    def test_instruction_file_splits_into_sections_without_fence_damage(self) -> None:
+        self.write(
+            "project/CLAUDE.md",
+            "# Project\n\n## 编码约定\n\n- 2 spaces\n\n"
+            "## 命令\n\n```bash\n# not a heading\npnpm test\n```\n",
+        )
+        adapter = self.adapter()
+        entries = adapter.read([s for s in adapter.discover() if s.layer == "project"][0])
+        self.assertEqual(len(entries), 3)  # title + two sections
+        # CJK headings must survive slugging; otherwise the tag is silently dropped.
+        self.assertIn("编码约定", [e.tags[-1] for e in entries])
+        commands = [e for e in entries if "pnpm test" in e.body][0]
+        self.assertIn("# not a heading", commands.body)
+
+    def test_instruction_entries_need_review(self) -> None:
+        self.write("project/CLAUDE.md", "## Rule\n\n- never force push\n")
+        adapter = self.adapter()
+        entry = adapter.read(adapter.discover()[0])[0]
+        self.assertEqual(entry.source_kind, "instruction")
+        self.assertEqual(entry.category, "decision")
+        self.assertEqual(entry.trust, "review")
+        self.assertEqual(entry.status, "pending")
+        # Provenance must include the content hash: "which version of that file".
+        self.assertTrue(entry.source_hash.startswith("sha256:"))
+
+    def test_auto_memory_maps_type_and_modified(self) -> None:
+        self.write(
+            "claude-home/projects/D--project-demo/memory/feedback_testing.md",
+            "---\nname: feedback_testing\ntype: feedback\n"
+            "modified: 2026-11-20T10:00:00+08:00\n---\n\nAlways use pnpm.\n",
+        )
+        self.write(
+            "claude-home/projects/D--project-demo/memory/MEMORY.md",
+            "# Index\n\n- feedback_testing: use pnpm\n",
+        )
+        adapter = self.adapter()
+        memory_sources = [s for s in adapter.discover() if s.source_kind == "auto_memory"]
+        self.assertEqual(len(memory_sources), 1, "MEMORY.md must be treated as an index")
+        entry = adapter.read(memory_sources[0])[0]
+        self.assertEqual(entry.category, "preference")  # feedback -> preference
+        self.assertEqual(entry.source_kind, "auto_memory")
+        self.assertTrue(entry.created_at.startswith("2026-11-20T10:00:00"))
+        self.assertIn("feedback", entry.tags)
+        self.assertTrue(any(tag.startswith("claude-project-") for tag in entry.tags))
+
+    def test_unknown_type_falls_back_to_knowledge(self) -> None:
+        self.write(
+            "claude-home/projects/p/memory/odd.md",
+            "---\ntype: something-new\n---\n\nA fact.\n",
+        )
+        adapter = self.adapter()
+        entry = adapter.read(adapter.discover()[0])[0]
+        self.assertEqual(entry.category, "knowledge")
+
+    def test_oversized_instruction_file_is_skipped(self) -> None:
+        from memoryhub.adapters import claude as claude_module
+
+        self.write("project/CLAUDE.md", "x" * 2048)
+        original = claude_module.MAX_INSTRUCTION_BYTES
+        claude_module.MAX_INSTRUCTION_BYTES = 1024
+        try:
+            sources = self.adapter().discover()
+        finally:
+            claude_module.MAX_INSTRUCTION_BYTES = original
+        self.assertEqual(sources, [])
 
 
 if __name__ == "__main__":

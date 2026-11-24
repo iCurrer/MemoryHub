@@ -109,6 +109,8 @@ consolidation_progress(singleton, max_thread_count)
 
 ### 3.3 auto memory：字段几乎与我们同构（官方）
 
+> **实现状态**：`adapters/claude.py` 已按本节实现（P2-05）。但**本机未安装 Claude Code，未经真实样本验证** —— 首次在真机使用前请重跑 §9，并复核 §8 第 1 项。
+
 目录：`~/.claude/projects/<project>/memory/`，`<project>` 由 git 仓库派生（同一 repo 的 worktree 共享一个目录）；可用 `autoMemoryDirectory` 覆盖；`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` 关闭。
 
 ```
