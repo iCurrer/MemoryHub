@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 
 from . import __version__, config
 from .adapters import ADAPTERS, build
+from .backup import HistoryUnavailable, collect, summarise
 from .frontmatter import FrontmatterError
 from .models import CATEGORIES, STATUSES, MemoryEntry, ValidationError, now_iso
 from .storage.index import Index, IndexUnavailable
@@ -450,6 +451,44 @@ def cmd_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_log(args: argparse.Namespace) -> int:
+    """Summarise what changed in the vault, from its own git history (P4-03)."""
+    store = _store(args)
+    try:
+        commits = collect(store.root, since=args.since, limit=args.limit)
+    except HistoryUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        if "not a git repository" in str(exc):
+            print("hint: `git -C <vault> init` then commit, or use `memoryhub backup` once it exists", file=sys.stderr)
+        return 1
+
+    if not commits:
+        scope = f" since {args.since}" if args.since else ""
+        print(f"no commits{scope}")
+        return 0
+
+    for commit in commits:
+        print(f"{commit.date[:10]}  {commit.digest}  {commit.subject}")
+        for change in commit.changes:
+            if not change.entry_id:
+                continue
+            where = f"  {change.category:<10} " if change.category else ""
+            print(f"          {change.label:<8}{where}{change.entry_id}")
+        non_memory = sum(1 for change in commit.changes if not change.entry_id)
+        if non_memory:
+            print(f"          ({non_memory} non-memory file change(s) not listed)")
+        print()
+
+    stats = summarise(commits)
+    scope = f" since {args.since}" if args.since else ""
+    print(
+        f"{stats['commits']} commit(s){scope}: "
+        f"{stats['added']} added, {stats['updated']} updated, {stats['removed']} removed "
+        f"({stats['entries']} distinct entries)"
+    )
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
     entries, errors = store.scan()
@@ -613,6 +652,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="report what would be imported without writing anything",
     )
     p_scan.set_defaults(func=cmd_scan)
+
+    p_log = sub.add_parser(
+        "log", parents=[vault_arg], help="summarise recent changes from the vault's git history"
+    )
+    p_log.add_argument("--since", default=None, help="window: 7d / 12h / 2w / an ISO date")
+    p_log.add_argument("--limit", type=int, default=50, help="max commits to read")
+    p_log.set_defaults(func=cmd_log)
 
     p_index = sub.add_parser(
         "index", parents=[vault_arg], help="build or report the SQLite index"

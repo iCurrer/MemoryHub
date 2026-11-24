@@ -31,18 +31,20 @@
 | `src/memoryhub/adapters/workbuddy.py` | 两种形态：`memory/<uuid>_memory.md` 与 `user-<uuid>-personal/`（IDENTITY/SOUL/USER/MEMORY） | 稳定（P2-03a），格式依据见 docs/04 §5 |
 | `src/memoryhub/adapters/claude.py` | `CLAUDE.md` 链 + auto memory 适配器 | 指令层**已真机验证**；auto memory 层仍待真数据（P2-05） |
 | `src/memoryhub/adapters/codex.py` | Codex 指令链（override 遮蔽、32 KiB 上限）**已用真 codex exec 验证** | 稳定（P2-04） |
+| `src/memoryhub/backup/history.py` | 从 vault 的 git log 读变更摘要（`log`） | 稳定（P4-03） |
 | `src/memoryhub/storage/index.py` | SQLite FTS5 索引：trigram、mtime 新鲜度、可重建 | 稳定（P2-02） |
 | `src/memoryhub/watcher/` | 轮询 + 防抖 + 哈希去重（`MtimeTracker`→`Debouncer`→`HashTracker`） | 稳定（P2-06） |
 | `src/memoryhub/mcp/server.py` | 只读 MCP 三件套 + 可见性规则（ADR-012） | 稳定（P5-01 3/5） |
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
 | `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析 | 稳定（注意：`save()` 会整份重写，加配置项前先改成合并写入） |
-| `src/memoryhub/cli.py` | 15 个命令 | 稳定，命令会继续增加 |
+| `src/memoryhub/cli.py` | 16 个命令 | 稳定，命令会继续增加 |
 | `tests/test_store.py` | 30 个用例 | 会随功能增长 |
 | `tests/test_cli.py` | 19 个端到端用例 | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
 | `tests/test_adapters.py` | 27 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude 适配器 |
 | `tests/test_mcp.py` | 9 个用例 | 可见性规则 + 真实 stdio 握手（含 stdout 纯净性断言） |
 | `tests/test_watcher.py` | 11 个用例 | 防抖/哈希/排除 + 注入时钟 |
 | `tests/test_index.py` | 9 个用例 | 中文、删库重建一致、外部编辑、兜底 |
+| `tests/test_history.py` | 8 个用例 | 真实 git 仓：新增/修改/删除、`--since` 翻译、非仓与空仓 |
 | `tests/test_cli.py` 审核流部分 | 8 个用例 | diff 自动配对 / 批量 approve / blocked 跳过 |
 
 可用命令：`init` `doctor` `new` `scan` `mcp` `list` `show` `search` `approve` `reject` `stats`
@@ -66,7 +68,7 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 124 passed
+python -m unittest discover -s tests -v          # 期望 132 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -114,7 +116,7 @@ Claude Desktop 放在 `%APPDATA%\Claude\claude_desktop_config.json`；Cursor 放
 | 4 | 无 `LICENSE` 文件 | 公开仓默认"保留所有权利"，与开源定位矛盾 | **待拍板**，倾向 Apache-2.0 |
 | 5 | `config.save()` 整份重写配置 | 阶段 3 加 `ai.*` 后，`init` 会把它们抹掉 | 阶段 3 前改成合并 |
 | 6 | `supersedes` 不做引用存在性校验，可悬空 | 取代链是核心资产，却没有完整性检查 | 阶段 3 冲突检测时补 |
-| 7 | `status` 字段与文件位置是两个真相源 | 手改 `status` 不会移动文件，`list` 会出现躺在 inbox 里的 approved | 阶段 4 差异预览时统一 |
+| 7 | `status` 字段与文件位置是两个真相源 | 手改 `status` 不会移动文件；**保存过期快照会把已批准条目搬回 inbox**（P4-03 写测试时实测到，git 里表现为 A inbox + D vault） | 已在 `save()` 文档里写明，需在存储层加乐观并发校验 |
 | 8 | `AGENTS.md`「测试必须能在无第三方包的机器上跑通」已不成立 | 新增了 `pyyaml` 依赖，新人按契约描述会以为不用装 | **待所有者改措辞**，见 ADR-005 |
 
 （已清：frontmatter 读不出块列表 —— P2-01 解决，见 ADR-005。）

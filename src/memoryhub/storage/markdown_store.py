@@ -270,7 +270,15 @@ class VaultStore:
         return target
 
     def save(self, entry: MemoryEntry) -> Path:
-        """Upsert an entry that already exists, or one that is about to."""
+        """Upsert an entry that already exists, or one that is about to.
+
+        **Reload before editing.** The target path is derived from ``entry.status``,
+        so saving a stale snapshot silently reverts the entry's location -- a
+        pending copy of an entry that has since been approved will be written back
+        into ``inbox/pending`` and the approved file deleted. Use
+        ``store.get(id)`` to obtain the current object first. (Tracked as the
+        "status and location are two sources of truth" debt in HANDOFF.)
+        """
         entry.validate()
         with VaultLock(self.lock_path):
             target = self.target_path(entry)
