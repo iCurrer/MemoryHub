@@ -7,13 +7,24 @@ stored beyond ``VaultStore``.
 
 from __future__ import annotations
 
-from .server import VISIBLE_STATUSES, build_server, get, listing, search, serve
+from .server import (
+    MAX_PROPOSAL_CHARS,
+    VISIBLE_STATUSES,
+    build_server,
+    get,
+    listing,
+    propose,
+    search,
+    serve,
+)
 
 __all__ = [
+    "MAX_PROPOSAL_CHARS",
     "VISIBLE_STATUSES",
     "build_server",
     "get",
     "listing",
+    "propose",
     "search",
     "serve",
 ]

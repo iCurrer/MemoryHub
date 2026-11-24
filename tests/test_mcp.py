@@ -19,8 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from memoryhub.mcp import get, listing, search  # noqa: E402
-from memoryhub.models import MemoryEntry  # noqa: E402
+from memoryhub.mcp import MAX_PROPOSAL_CHARS, get, listing, propose, search  # noqa: E402
+from memoryhub.models import MemoryEntry, ValidationError  # noqa: E402
 from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +108,57 @@ class McpToolsTests(unittest.TestCase):
 
     def test_empty_query_returns_nothing(self) -> None:
         self.assertEqual(search(self.store, "   ")["results"], [])
+
+
+class McpProposeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = VaultStore(Path(self._tmp.name) / "vault-root")
+        self.store.init_layout()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_proposal_is_pending_and_invisible_to_search(self) -> None:
+        result = propose(self.store, "user prefers pnpm over npm", "preference")
+        self.assertTrue(result["created"])
+        self.assertEqual(result["status"], "pending")
+        self.assertTrue(result["needs_review"])
+
+        entry = self.store.get(result["id"])
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.status, "pending")
+        # The whole point of ADR-003: a proposal must not become truth by itself.
+        self.assertEqual(search(self.store, "pnpm")["total"], 0)
+
+    def test_approved_proposal_becomes_searchable(self) -> None:
+        result = propose(self.store, "user prefers pnpm over npm", "preference")
+        self.store.set_status(result["id"], "approved")
+        self.assertEqual(search(self.store, "pnpm")["total"], 1)
+
+    def test_empty_and_oversized_bodies_are_refused(self) -> None:
+        self.assertFalse(propose(self.store, "   ")["created"])
+        self.assertFalse(propose(self.store, "x" * (MAX_PROPOSAL_CHARS + 1))["created"])
+        self.assertEqual(self.store.scan()[0], [])
+
+    def test_unknown_category_is_refused(self) -> None:
+        result = propose(self.store, "some fact", "nonsense")
+        self.assertFalse(result["created"])
+        self.assertIn("unknown category", result["reason"])
+
+    def test_secret_shaped_body_is_blocked_not_approved(self) -> None:
+        result = propose(self.store, "deploy key: sk-abcdefghijklmnopqrstuvwx123456", "knowledge")
+        self.assertTrue(result["created"])
+        self.assertEqual(result["trust"], "blocked")
+        self.assertTrue(result["flagged"])
+        with self.assertRaises(ValidationError):
+            self.store.set_status(result["id"], "approved")
+
+    def test_tags_are_split_and_provenance_is_recorded(self) -> None:
+        result = propose(self.store, "uses sqlite fts5", "knowledge", "storage, sqlite")
+        entry = self.store.get(result["id"])
+        self.assertEqual(entry.tags, ["storage", "sqlite"])
+        self.assertEqual(entry.source_adapter, "mcp")
 
 
 class McpStdioTests(unittest.TestCase):
@@ -206,9 +257,12 @@ class McpStdioTests(unittest.TestCase):
 
         tools = self.call({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, 2)
         names = sorted(tool["name"] for tool in tools["result"]["tools"])
-        self.assertEqual(names, ["memory_get", "memory_list", "memory_search"])
-        # Read-only surface: no write/propose tool may ever appear here (ADR-002).
-        self.assertFalse(any("write" in name or "propose" in name for name in names))
+        self.assertEqual(
+            names, ["memory_get", "memory_list", "memory_propose", "memory_search"]
+        )
+        # ADR-002: no client may write into the vault directly. Propose only
+        # creates a pending entry, which is why it is allowed.
+        self.assertFalse(any("write" in name for name in names))
 
         found = self.call(
             {

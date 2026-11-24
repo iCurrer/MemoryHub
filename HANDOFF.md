@@ -44,7 +44,7 @@
 本轮新增的行为（都带测试）：
 
 - **`scan`**：从已注册的 adapter 采集到 `inbox/pending`，按 `(adapter, source_path, body)` 指纹去重，可 `--dry-run`；adapter 恒为只读
-- **`mcp`**：stdio 上的只读 MCP server，3 个工具；`search`/`list` 只暴露 `approved` 且未过期，`get` 可查任意状态并标注；每条结果带来源与时效
+- **`mcp`**：stdio MCP server，4 个工具；`search`/`list` 只暴露 `approved` 且未过期，`get` 可查任意状态并标注，`propose` 只能产生 `pending`（命中密钥形状即 `blocked`）
 - `new` 走 `store.create()`：id 被占用时**报错而不是覆盖**
 - `new --approve` 遇到 `trust=review` 会拒绝，需 `--force` 才越过；`blocked` 无论如何不可越过
 - `list` / `search` 默认隐藏 `valid_until` 已过期的条目，`--include-expired` 打开；
@@ -60,7 +60,7 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 82 passed
+python -m unittest discover -s tests -v          # 期望 88 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 7 个目录
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -77,7 +77,7 @@ python -m memoryhub mcp --vault /tmp/v            # 阻塞，等 MCP 客户端�
 - 监控：无 Watchdog，改动来源文件不会被发现，`scan` 要手动跑
 - 索引：无 SQLite，`search` 是遍历目录（400 条约 114ms，可接受）
 - AI：无 Provider，无去重/冲突检测；`scan` 只做规则级切分，**语义去重与冲突一律没有**
-- MCP：只读三件套（`search`/`get`/`list`）。**没有** `memory_propose` / `memory_status`（等 P5-02 权限分级），**没有** HTTP 传输，**没有**认证
+- MCP：四个工具（`search` / `get` / `list` / `propose`）。**没有** `memory_status`、**没有** 权限分级（所有客户端都是 Propose 权限）、**没有** HTTP 传输、**没有** 认证
 - 备份：无 `backup` 命令，Git 需手工执行
 
 ### 接到 AI 客户端（已验证协议，未在该客户端实测）

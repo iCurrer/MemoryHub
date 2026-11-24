@@ -1,4 +1,4 @@
-# MemoryHub
+﻿# MemoryHub
 
 跨 AI 工具的个人记忆治理层。本地优先、可审计、可迁移。
 
@@ -45,10 +45,10 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - 时效裁决：`valid_until` 已过期的条目默认不出现在 `list` / `search` 里（`--include-expired` 打开）
 - 读不了的 `.md` 不会被静默跳过：`list` / `search` 告警，`stats` 计数，`doctor` 判 FAIL
 - **采集**：`scan` 从 WorkBuddy（`~/.workbuddy/memory/`）与 Claude Code（`CLAUDE.md` 链 + `projects/*/memory/`）读入待审条目，按内容指纹去重、可 `--dry-run`
-- **MCP 只读入口**：`memoryhub mcp` 起 stdio 服务，`memory_search` / `memory_get` / `memory_list`
-  三个工具，每条结果带来源与有效期；只暴露已批准且未过期的条目
+- **MCP 只读入口**：`memoryhub mcp` 起 stdio 服务，`memory_search` / `memory_get` / `memory_list` / `memory_propose`
+  四个工具，每条结果带来源与有效期；只暴露已批准且未过期的条目
 - CLI：`init` `doctor` `new` `scan` `mcp` `list` `show` `search` `approve` `reject` `stats`
-- 79 个单元测试（含 19 个 CLI 端到端 + 1 个真实 stdio 握手），全部通过
+- 88 个单元测试（含 19 个 CLI 端到端 + 1 个真实 stdio 握手），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖，P2-01 / P5-01 为真 YAML 与 MCP 引入（代价见 ADR-005、ADR-012）。
 

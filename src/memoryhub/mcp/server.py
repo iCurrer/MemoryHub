@@ -28,17 +28,26 @@ from mcp.server.mcpserver import MCPServer
 
 from .. import __version__
 from ..config import resolve_vault
-from ..models import MemoryEntry
+from ..models import CATEGORIES, MemoryEntry
+from ..safety import findings
 from ..storage.markdown_store import VaultStore
 
 #: Only reviewed entries are visible to other AI tools (ADR-003).
 VISIBLE_STATUSES = ("approved",)
 
+#: A proposal bigger than this is not a memory, it is a document.
+MAX_PROPOSAL_CHARS = 4000
+
 INSTRUCTIONS = (
     "MemoryHub serves the user's own, human-reviewed personal memory. "
     "Every result carries source_adapter/source_path/created_at so you can tell "
     "the user where a fact came from, and valid_until/superseded_by so you can "
-    "tell whether it still holds. Prefer memory_search over guessing."
+    "tell whether it still holds. Prefer memory_search over guessing.\n\n"
+    "memory_propose hands a candidate memory back to MemoryHub. Use it when the "
+    "user states a durable preference, a correction, a project constraint, or a "
+    "decision that would be worth remembering next session. Proposals are NOT "
+    "live: they land in a review queue and the user approves them. Propose one "
+    "fact per call, in the user's own words, and never include credentials."
 )
 
 
@@ -114,6 +123,56 @@ def get(store: VaultStore, entry_id: str) -> Dict[str, Any]:
     return {"found": True, "result": _payload(entry)}
 
 
+def propose(
+    store: VaultStore,
+    body: str,
+    category: str = "knowledge",
+    tags: str = "",
+) -> Dict[str, Any]:
+    """Accept a candidate memory from an AI client.
+
+    It can only ever create a ``pending`` entry: no path through this function
+    reaches ``status=approved``. A body that looks like it carries a credential
+    is stored as ``sensitivity=sensitive``, which ADR-003 turns into ``blocked``
+    -- visible to the user, impossible to approve without lowering the flag.
+    """
+    if not isinstance(body, str) or not body.strip():
+        return {"created": False, "reason": "body is required"}
+    if len(body) > MAX_PROPOSAL_CHARS:
+        return {
+            "created": False,
+            "reason": f"body is {len(body)} chars, over the {MAX_PROPOSAL_CHARS} limit",
+        }
+    if category not in CATEGORIES:
+        return {
+            "created": False,
+            "reason": f"unknown category {category!r}; expected one of {list(CATEGORIES)}",
+        }
+
+    flags = findings(body)
+    entry = MemoryEntry.create(
+        category=category,
+        body=body.strip() + "\n",
+        tags=[tag.strip() for tag in tags.split(",") if tag.strip()],
+        source_adapter="mcp",
+        source_kind="doc",
+        sensitivity="sensitive" if flags else "normal",
+    )
+    store.create(entry)
+    return {
+        "created": True,
+        "id": entry.id,
+        "status": entry.status,
+        "trust": entry.trust,
+        "needs_review": True,
+        "flagged": flags,
+        "note": (
+            "stored in the review queue; it is not visible to memory_search "
+            "until the user approves it"
+        ),
+    }
+
+
 def build_server(vault: Path) -> MCPServer:
     """Bind the three read-only tools to one vault."""
     store = VaultStore(Path(vault))
@@ -144,6 +203,16 @@ def build_server(vault: Path) -> MCPServer:
     def memory_list(category: str = "", limit: int = 20) -> str:
         return json.dumps(
             listing(store, category or None, limit), ensure_ascii=False
+        )
+
+    @server.tool(
+        description="Propose a memory for the user to review. It lands in a "
+        "review queue (never live immediately) and is not searchable until "
+        "approved. One fact per call; never include credentials."
+    )
+    def memory_propose(body: str, category: str = "knowledge", tags: str = "") -> str:
+        return json.dumps(
+            propose(store, body, category, tags), ensure_ascii=False
         )
 
     return server

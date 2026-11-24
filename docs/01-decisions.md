@@ -280,7 +280,8 @@
 
 | # | 决策 | 理由 |
 |---|---|---|
-| 1 | **只读三件套**：`memory_search` / `memory_get` / `memory_list`。不提供 `memory_write`，`memory_propose` 推迟到 P5-02 权限分级之后 | 写能力一旦存在，ADR-002 与 ADR-003 都成了君子协定。先有"能被读"，再谈"能被写" |
+| 1 | **只读三件套** + **一个提案入口**：`memory_search` / `memory_get` / `memory_list` / `memory_propose`。**永不提供 `memory_write`** | 写能力一旦存在，ADR-002 与 ADR-003 都成了君子协定。`memory_propose` 只能产生 `status=pending`，是"交提案"而非"写库" |
+| 1b | **提案必须过一道密钥形状检查**（`safety.py`）：命中即 `sensitivity=sensitive` → `blocked`，人不可批准 | 开放写入路径却不设防，等于让被提示注入的客户端把凭证明目张胆地存成 `auto` 可批的记忆。这不是检测器，只挡最容易挡的形状 |
 | 2 | **可见性**：`search` / `list` 只返回 `status=approved` 且 `valid_until` 未过期的条目；`memory_get` 可返回任意状态，但响应里必须带 `status` 与 `trust` | 让未经人审的记忆流进别的 AI 的上下文，等于绕过 ADR-003。而按 id 查询是人的显式动作，允许并如实标注状态 |
 | 3 | **每条结果必须带 provenance + validity**（`source_adapter` / `source_path` / `created_at` / `valid_until` / `superseded_by`） | 这是 MCP 相对"导出快照"的本质优势：快照一落地就开始过期且无人知晓，MCP 每次回答都能现算"这条还算数吗" |
 | 4 | **只做 stdio 传输**，不做 HTTP | 本地工具，不需要端口、不需要认证、不暴露攻击面。`127.0.0.1` 的 HTTP 服务留到确有需要时 |
@@ -293,3 +294,7 @@
 若将来打包体积或离线安装成为问题，可退化为**手写 stdio JSON-RPC**（MCP 的 stdio 子集只有 `initialize` / `tools/list` / `tools/call` / 通知，约 200 行，零依赖）。现在不这么做，是因为协议版本协商出错时，真实客户端会直接连不上，而 SDK 把这个风险降到零。
 
 **复审时点**：P5-02（权限分级）时复审第 1、2 条；P6-01（PyInstaller 打包）时复审依赖树，届时再决定是否手写替换。
+
+**追加（2026-11-24，同日）**：`memory_propose` 已落地。动因不是"想加功能"，而是一条外部事实——**Claude Desktop 的记忆在云端、本机读不到**（见 `04-upstream-formats.md` §3.0）。既然"采"这条路对云端工具不通，唯一能做的是让它们**自己把事实交过来**。这条也顺带把产品叙事从"我采集你"改成"你交给我、我裁决、大家来查"，后者在架构上更干净，也不受任何工具有没有本地文件影响。
+
+权限分级（Read / Propose / Admin）仍未做：现在所有客户端都是 Propose 权限。`memory_write` 依然不存在。
