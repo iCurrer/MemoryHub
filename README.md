@@ -63,7 +63,10 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 - `memory_search` / `memory_get` / `memory_list`：只返回**已批准且未过期**的条目，每条带来源与有效期
 - `memory_propose`：AI 客户端可以交提案，但**只能进待审队列**；命中密钥形状直接 `blocked`
-- 没有 `memory_write` —— 任何客户端都无法直接把内容写进正式库
+- `memory_status`：队列深度与索引健康（仅 `admin` 级别）
+- 权限分级：`--permission read|propose|admin`（默认 `propose`）。权限按**进程**划分，
+  不按客户端身份 —— MCP 的 `clientInfo` 是自报且无认证的，按它分级只是安全剧场
+- 没有 `memory_write` —— **任何级别**都无法直接把内容写进正式库
 
 **其他**
 
@@ -72,7 +75,7 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目
 - 保存前校验快照是否过期（`StaleEntryError`），不会把已批准的条目误降级
-- 136 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、1 个真实 MCP stdio 握手），全部通过
+- 140 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、1 个真实 MCP stdio 握手），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 

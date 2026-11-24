@@ -68,7 +68,7 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 136 passed
+python -m unittest discover -s tests -v          # 期望 140 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -85,7 +85,7 @@ python -m memoryhub mcp --vault /tmp/v            # 阻塞，等 MCP 客户端�
 - 监控：**有轮询 watcher（`watch`）**，2 秒间隔 + 防抖 + 哈希；没有 `watchdog`（有意，见 roadmap P2-06）
 - 索引：**有**（`database/index.db`，FTS5 trigram + `LIKE` 兜底），`search` 自动建/重建；坏掉会退回全表扫描
 - AI：无 Provider，无去重/冲突检测；`scan` 只做规则级切分，**语义去重与冲突一律没有**
-- MCP：四个工具（`search` / `get` / `list` / `propose`）。**没有** `memory_status`、**没有** 权限分级（所有客户端都是 Propose 权限）、**没有** HTTP 传输、**没有** 认证
+- MCP：`--permission read|propose|admin`（默认 propose）；read=3 工具、propose=+propose、admin=+status。**任何级别都没有 `memory_write`**、**没有** HTTP 传输、**没有** 认证
 - 备份：无 `backup` 命令，Git 需手工执行
 
 ### 接到 AI 客户端（已验证协议，未在该客户端实测）

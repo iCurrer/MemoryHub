@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import os
 import shutil
 import subprocess
 import sys
@@ -291,7 +292,7 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     except ImportError as exc:  # pragma: no cover - depends on the install
         print(f"error: the MCP server needs the `mcp` package: {exc}", file=sys.stderr)
         return 1
-    serve(getattr(args, "vault", None))
+    serve(getattr(args, "vault", None), args.permission)
     return 0
 
 
@@ -681,7 +682,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_mcp = sub.add_parser(
         "mcp",
         parents=[vault_arg],
-        help="serve the read-only MCP tools over stdio (for Cursor / Claude Desktop)",
+        help="serve the MCP tools over stdio (for Cursor / Claude Desktop)",
+    )
+    p_mcp.add_argument(
+        "--permission",
+        choices=("read", "propose", "admin"),
+        default=os.environ.get("MEMORYHUB_MCP_PERMISSION", "propose"),
+        help="capability tier: read (3 tools) / propose (+memory_propose) / "
+        "admin (+memory_status). Default: propose, or $MEMORYHUB_MCP_PERMISSION",
     )
     p_mcp.set_defaults(func=cmd_mcp)
 

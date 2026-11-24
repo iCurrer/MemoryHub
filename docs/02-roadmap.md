@@ -250,7 +250,20 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 | 工单 | 内容 | 完成判据 |
 |---|---|---|
 | P5-01 | MCP stdio：`memory_search` / `memory_get` / `memory_list` / `memory_propose` / `memory_status` | 任一 MCP 客户端可调用，stdout 只输出协议消息 |
-| P5-02 | 权限分级 Read / Propose / Admin | 默认无 `memory_write`；不提供无审核写入 |
+| P5-02 | 权限分级 Read / Propose / Admin | ✅ 完成 |
+
+**P5-02 实际落地**：`memoryhub mcp --permission read|propose|admin`（或 `$MEMORYHUB_MCP_PERMISSION`）。
+
+| 级别 | 暴露的工具 |
+|---|---|
+| `read` | `memory_search` / `memory_get` / `memory_list` |
+| `propose`（默认） | 上述 + `memory_propose` |
+| `admin` | 上述 + `memory_status` |
+
+- 权限**按进程划分，不按客户端身份**：MCP 的 `clientInfo` 是客户端自报且无认证的，
+  "Cursor 给 propose、Claude 给 read" 只是安全剧场。stdio 下唯一可信的边界是启动者。
+- 未被授予的工具**根本不注册**，所以 `tools/list` 就是真实能力，客户端不会看到一个调不通的工具。
+- **任何级别都没有 `memory_write`**：`propose` 只能进待审队列，`admin` 也只是多一个只读的 `memory_status`。
 | P5-03 | 敏感信息检测与排除规则 | 明显密钥被阻断，`doctor` 有对应检查 |
 | P5-04 | `memoryhub backup`：本地 commit + 可选远端 | 远端不可用时本地提交成功、任务进重试 |
 

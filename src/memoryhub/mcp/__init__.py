@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from .server import (
     MAX_PROPOSAL_CHARS,
+    PERMISSIONS,
+    TOOLS_BY_PERMISSION,
     VISIBLE_STATUSES,
     build_server,
     get,
@@ -16,10 +18,13 @@ from .server import (
     propose,
     search,
     serve,
+    status,
 )
 
 __all__ = [
     "MAX_PROPOSAL_CHARS",
+    "PERMISSIONS",
+    "TOOLS_BY_PERMISSION",
     "VISIBLE_STATUSES",
     "build_server",
     "get",
@@ -27,4 +32,5 @@ __all__ = [
     "propose",
     "search",
     "serve",
+    "status",
 ]

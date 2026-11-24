@@ -38,6 +38,16 @@ VISIBLE_STATUSES = ("approved",)
 #: A proposal bigger than this is not a memory, it is a document.
 MAX_PROPOSAL_CHARS = 4000
 
+#: Capability tiers, decided by whoever launches the server.
+#:
+#: Deliberately **not** keyed on client identity: MCP's ``clientInfo`` is
+#: self-reported and unauthenticated, so "Cursor gets propose, Claude gets read"
+#: would be a security theatre. On stdio the only trustworthy boundary is the
+#: command line / environment of the process the user started. No tier grants a
+#: write that skips review -- ``memory_write`` does not exist at any level.
+PERMISSIONS = ("read", "propose", "admin")
+RANK = {name: index for index, name in enumerate(PERMISSIONS)}
+
 INSTRUCTIONS = (
     "MemoryHub serves the user's own, human-reviewed personal memory. "
     "Every result carries source_adapter/source_path/created_at so you can tell "
@@ -173,13 +183,49 @@ def propose(
     }
 
 
-def build_server(vault: Path) -> MCPServer:
-    """Bind the three read-only tools to one vault."""
+def status(store: VaultStore, permission: str = "propose") -> Dict[str, Any]:
+    """Queue depth and index health, for a client that wants to orient itself."""
+    entries, errors = store.scan()
+    counts: Dict[str, int] = {}
+    blocked = 0
+    for entry in entries:
+        counts[entry.status] = counts.get(entry.status, 0) + 1
+        if entry.trust == "blocked":
+            blocked += 1
+    return {
+        "permission": permission,
+        "counts": counts,
+        "blocked": blocked,
+        "unreadable": len(errors),
+        "expired": sum(1 for entry in entries if entry.is_expired()),
+        "tools": list(TOOLS_BY_PERMISSION[permission]),
+    }
+
+
+#: Which tools each tier exposes. Registered tools are what clients discover via
+#: ``tools/list``, so an absent tool is a capability the server truly does not have.
+TOOLS_BY_PERMISSION = {
+    "read": ("memory_search", "memory_get", "memory_list"),
+    "propose": ("memory_search", "memory_get", "memory_list", "memory_propose"),
+    "admin": (
+        "memory_search",
+        "memory_get",
+        "memory_list",
+        "memory_propose",
+        "memory_status",
+    ),
+}
+
+
+def build_server(vault: Path, permission: str = "propose") -> MCPServer:
+    """Bind the tools allowed by ``permission`` to one vault."""
+    if permission not in RANK:
+        raise ValueError(f"unknown permission {permission!r}; expected {PERMISSIONS}")
     store = VaultStore(Path(vault))
     server: MCPServer = MCPServer(
         name="memoryhub",
         version=__version__,
-        instructions=INSTRUCTIONS,
+        instructions=INSTRUCTIONS + f"\n\nPermission level: {permission}.",
     )
 
     @server.tool(
@@ -205,24 +251,35 @@ def build_server(vault: Path) -> MCPServer:
             listing(store, category or None, limit), ensure_ascii=False
         )
 
-    @server.tool(
-        description="Propose a memory for the user to review. It lands in a "
-        "review queue (never live immediately) and is not searchable until "
-        "approved. One fact per call; never include credentials."
-    )
-    def memory_propose(body: str, category: str = "knowledge", tags: str = "") -> str:
-        return json.dumps(
-            propose(store, body, category, tags), ensure_ascii=False
+    if RANK[permission] >= RANK["propose"]:
+
+        @server.tool(
+            description="Propose a memory for the user to review. It lands in a "
+            "review queue (never live immediately) and is not searchable until "
+            "approved. One fact per call; never include credentials."
         )
+        def memory_propose(body: str, category: str = "knowledge", tags: str = "") -> str:
+            return json.dumps(
+                propose(store, body, category, tags), ensure_ascii=False
+            )
+
+    if RANK[permission] >= RANK["admin"]:
+
+        @server.tool(
+            description="Report how many memories await review and whether the "
+            "index is healthy. Read-only."
+        )
+        def memory_status() -> str:
+            return json.dumps(status(store, permission), ensure_ascii=False)
 
     return server
 
 
-def serve(vault: Optional[str] = None) -> None:
+def serve(vault: Optional[str] = None, permission: str = "propose") -> None:
     """Run the server over stdio. stdout belongs to the protocol."""
     resolved = resolve_vault(vault)
     if not Path(resolved).is_dir():
         raise SystemExit(
             f"error: vault not found: {resolved}; run `memoryhub init` first"
         )
-    build_server(resolved).run("stdio")
+    build_server(resolved, permission).run("stdio")

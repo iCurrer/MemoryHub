@@ -19,7 +19,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from memoryhub.mcp import MAX_PROPOSAL_CHARS, get, listing, propose, search  # noqa: E402
+from memoryhub.mcp import (  # noqa: E402
+    MAX_PROPOSAL_CHARS,
+    TOOLS_BY_PERMISSION,
+    get,
+    listing,
+    propose,
+    search,
+    status,
+)
 from memoryhub.models import MemoryEntry, ValidationError  # noqa: E402
 from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
 
@@ -282,6 +290,117 @@ class McpStdioTests(unittest.TestCase):
             if line.strip():
                 self.assertIn("jsonrpc", json.loads(line))
 
+class McpStatusTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = VaultStore(Path(self._tmp.name) / "vault-root")
+        self.store.init_layout()
+        approved = MemoryEntry.create(category="preference", body="prefers python")
+        self.store.create(approved)
+        self.store.set_status(approved.id, "approved")
+        self.store.create(MemoryEntry.create(category="profile", body="pending fact"))
+        blocked = MemoryEntry.create(
+            category="knowledge", body="key: sk-abcdefghijklmnopqrstuvwx123456",
+            sensitivity="sensitive",
+        )
+        self.store.create(blocked)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_status_counts_by_state(self) -> None:
+        report = status(self.store, "admin")
+        self.assertEqual(report["counts"].get("approved"), 1)
+        self.assertEqual(report["counts"].get("pending"), 2)
+        self.assertEqual(report["blocked"], 1)
+        self.assertEqual(report["unreadable"], 0)
+
+    def test_status_reports_the_tools_of_its_own_tier(self) -> None:
+        for permission, expected in TOOLS_BY_PERMISSION.items():
+            self.assertEqual(status(self.store, permission)["tools"], list(expected))
+
+    def test_tiers_only_grow(self) -> None:
+        self.assertEqual(TOOLS_BY_PERMISSION["read"], (
+            "memory_search", "memory_get", "memory_list"))
+        self.assertIn("memory_propose", TOOLS_BY_PERMISSION["propose"])
+        self.assertNotIn("memory_status", TOOLS_BY_PERMISSION["propose"])
+        self.assertIn("memory_status", TOOLS_BY_PERMISSION["admin"])
+        # No tier may ever expose a direct write (ADR-002).
+        for tools in TOOLS_BY_PERMISSION.values():
+            self.assertFalse(any("write" in name for name in tools))
+
+
+class McpReadTierTests(unittest.TestCase):
+    """A server started with --permission read must not advertise propose at all."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.vault = self.root / "vault-root"
+        VaultStore(self.vault).init_layout()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_tools_list_is_read_only(self) -> None:
+        env = {
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+            "MEMORYHUB_HOME": str(self.root / "home"),
+            "SYSTEMROOT": str(Path("C:/Windows")),
+            "PATH": str(Path(sys.executable).parent),
+            "MEMORYHUB_MCP_PERMISSION": "",
+        }
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "memoryhub", "mcp", "--vault", str(self.vault),
+             "--permission", "read"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", bufsize=1, cwd=str(REPO_ROOT), env=env,
+        )
+        lines: "queue.Queue[str]" = queue.Queue()
+        threading.Thread(
+            target=lambda: [lines.put(line) for line in proc.stdout], daemon=True
+        ).start()
+
+        def send(payload: dict) -> None:
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+
+        def wait(message_id: int, timeout: float = 30) -> dict:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                try:
+                    raw = lines.get(timeout=max(0.05, deadline - time.time()))
+                except queue.Empty:
+                    break
+                if not raw.strip():
+                    continue
+                parsed = json.loads(raw)
+                if parsed.get("id") == message_id:
+                    return parsed
+            self.fail(f"no response for id={message_id}")
+
+        try:
+            send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0"}}})
+            wait(1)
+            send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            tools = wait(2)["result"]["tools"]
+            self.assertEqual(
+                sorted(tool["name"] for tool in tools),
+                ["memory_get", "memory_list", "memory_search"],
+            )
+        finally:
+            proc.stdin.close()
+            proc.terminate()
+            try:
+                proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:  # pragma: no cover
+                proc.kill()
+
 
 if __name__ == "__main__":
+    unittest.main()
+
     unittest.main()
