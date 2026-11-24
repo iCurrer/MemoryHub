@@ -1,0 +1,21 @@
+# 本项目是代码仓，不含用户数据。以下为防呆排除项。
+vault/
+*.db
+*.db-journal
+*.sqlite
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+.env
+*.local.toml
+config.local.toml
+
+.DS_Store
+Thumbs.db
