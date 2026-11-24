@@ -59,7 +59,14 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - `scan`：一次性采集，按内容指纹去重，`--dry-run` 可预览
 - `watch`：2 秒轮询 + 防抖 + 哈希，只导入真正变化的文件（`--once` 供 cron/测试）
 
-**MCP（4 个工具，stdio）**
+**敏感分级（P5-03）**
+
+- 凭证形状（`sk-` / `ghp_` / `AKIA` / 私钥块 / `Bearer` / `key: xxx`）→ `secret` → **blocked**
+- 强 PII（身份证 / 手机号 / 银行卡 / 完整住址）→ `sensitive` → **blocked**
+- 弱 PII（城市、区县、学校）→ `personal` → 只标记，不阻断（把每个城市名都拦会让规则被无视）
+- `memoryhub audit [--apply]` 用同一分类器复查已有条目；`sensitivity` 命令可人工升降
+
+**MCP（4–5 个工具，stdio）**
 
 - `memory_search` / `memory_get` / `memory_list`：只返回**已批准且未过期**的条目，每条带来源与有效期
 - `memory_propose`：AI 客户端可以交提案，但**只能进待审队列**；命中密钥形状直接 `blocked`
@@ -70,12 +77,12 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 **其他**
 
-- CLI：`init` `doctor` `new` `scan` `watch` `index` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `stats`
+- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `sensitivity` `stats`
 - **索引**：SQLite FTS5 + trigram，中文可检索；删掉 `database/index.db` 会自动重建，结果不变
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目
 - 保存前校验快照是否过期（`StaleEntryError`），不会把已批准的条目误降级
-- 140 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、1 个真实 MCP stdio 握手），全部通过
+- 155 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、2 个真实 MCP stdio 会话），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 
