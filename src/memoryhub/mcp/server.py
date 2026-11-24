@@ -29,7 +29,7 @@ from mcp.server.mcpserver import MCPServer
 from .. import __version__
 from ..config import resolve_vault
 from ..models import CATEGORIES, MemoryEntry
-from ..safety import findings
+from ..safety import classify
 from ..storage.markdown_store import VaultStore
 
 #: Only reviewed entries are visible to other AI tools (ADR-003).
@@ -159,14 +159,14 @@ def propose(
             "reason": f"unknown category {category!r}; expected one of {list(CATEGORIES)}",
         }
 
-    flags = findings(body)
+    level, flags = classify(body)
     entry = MemoryEntry.create(
         category=category,
         body=body.strip() + "\n",
         tags=[tag.strip() for tag in tags.split(",") if tag.strip()],
         source_adapter="mcp",
         source_kind="doc",
-        sensitivity="sensitive" if flags else "normal",
+        sensitivity=level,
     )
     store.create(entry)
     return {

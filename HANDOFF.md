@@ -37,7 +37,7 @@
 | `src/memoryhub/mcp/server.py` | 只读 MCP 三件套 + 可见性规则（ADR-012） | 稳定（P5-01 3/5） |
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
 | `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析 | 稳定（注意：`save()` 会整份重写，加配置项前先改成合并写入） |
-| `src/memoryhub/cli.py` | 17 个命令 | 稳定，命令会继续增加 |
+| `src/memoryhub/cli.py` | 18 个命令 | 稳定，命令会继续增加 |
 | `tests/test_store.py` | 30 个用例 | 会随功能增长 |
 | `tests/test_cli.py` | 19 个端到端用例 | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
 | `tests/test_adapters.py` | 27 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude 适配器 |
@@ -68,7 +68,7 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 145 passed
+python -m unittest discover -s tests -v          # 期望 155 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -111,7 +111,7 @@ Claude Desktop 放在 `%APPDATA%\Claude\claude_desktop_config.json`；Cursor 放
 | # | 问题 | 影响 | 归属 |
 |---|---|---|---|
 | 1 | `doctor` 与日志输出绝对路径（含用户名） | 公开仓 issue 贴日志会泄露目录结构与用户名 | **待拍板**，加 `redact_path()` |
-| 2 | 敏感检测只有密钥形状（`safety.py`），**不认 PII**（住址/姓名/学校） | 真实导入时 `MEMORY.md` 的隐私条目以 `normal` 落地，批准后会经 MCP 流出 | 已补 `sensitivity` 命令可人工升降；P5-03 需扩到 PII |
+| 2 | 敏感检测覆盖凭证 + 强 PII（身份证/手机/住址）；**弱 PII 只标 personal** | 姓名、亲属关系等语义型隐私仍认不出；`personal` 级别不阻断 | 已够用；如需更强需语义判断（阶段 3） |
 | 3 | 锁是自制 O_EXCL + 120 秒陈旧清理；`__exit__` 无条件删锁文件 | 极端并发下有竞态；多进程（MCP + watcher）是阶段 5 的常态 | 阶段 5 评估 |
 | 3 | 仅在 Python 3.12/3.13 验证，声明 `>=3.11` | 3.11 兼容性未测（`pyyaml` 在 3.11 上的轮子也未验证） | 加 CI 矩阵 |
 | 4 | 无 `LICENSE` 文件 | 公开仓默认"保留所有权利"，与开源定位矛盾 | **待拍板**，倾向 Apache-2.0 |

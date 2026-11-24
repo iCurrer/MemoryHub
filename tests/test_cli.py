@@ -327,6 +327,44 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("no such memory", err)
 
+    # ------------------------------------------------------------- audit
+
+    def test_audit_reports_under_classified_entries(self) -> None:
+        clean = self.make("prefers pnpm")
+        leaky = self.make("lives at 上海市示例区示例路390号")
+        code, out, _err = self.run_cli("audit")
+        self.assertEqual(code, 0)
+        self.assertIn(leaky, out)
+        self.assertNotIn(clean, out)
+        self.assertIn("--apply", out)
+
+    def test_audit_apply_blocks_the_leaky_entry(self) -> None:
+        leaky = self.make("lives at 上海市示例区示例路390号")
+        code, out, _err = self.run_cli("audit", "--apply")
+        self.assertEqual(code, 0)
+        self.assertIn("1 entries re-classified", out)
+        _c, listed, _e = self.run_cli("list", "--status", "pending")
+        self.assertIn(leaky, listed)
+        # blocked now: approving must be refused
+        code, _out, err = self.run_cli("approve", leaky)
+        self.assertEqual(code, 1)
+        self.assertIn("blocked", err)
+
+    def test_audit_apply_skips_approved_entries(self) -> None:
+        entry = self.make("prefers pnpm")
+        self.run_cli("approve", entry)
+        leaky = self.make("phone 13900000000")
+        self.run_cli("approve", leaky)
+        code, _out, err = self.run_cli("audit", "--apply")
+        self.assertEqual(code, 0)
+        self.assertIn("approved; reject or archive it first", err)
+
+    def test_audit_on_a_clean_vault_says_so(self) -> None:
+        self.make("prefers pnpm")
+        code, out, _err = self.run_cli("audit")
+        self.assertEqual(code, 0)
+        self.assertIn("no unmarked sensitive content", out)
+
 
 if __name__ == "__main__":
     unittest.main()

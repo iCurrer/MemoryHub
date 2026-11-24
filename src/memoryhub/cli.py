@@ -16,6 +16,7 @@ from .adapters import ADAPTERS, build
 from .backup import HistoryUnavailable, collect, summarise
 from .frontmatter import FrontmatterError
 from .models import CATEGORIES, STATUSES, MemoryEntry, ValidationError, now_iso
+from .safety import classify
 from .storage.index import Index, IndexUnavailable
 from .storage.markdown_store import LockTimeout, VaultStore
 from .watcher import import_entries, watch
@@ -528,6 +529,50 @@ def cmd_sensitivity(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Find entries whose sensitivity looks wrong, optionally raise it (P5-03).
+
+    Adapters cannot know what is private -- they only know what a file says. This
+    re-reads every body through the same classifier the proposal path uses, so an
+    imported address cannot stay ``normal`` just because nobody looked.
+    """
+    store = _store(args)
+    entries, errors = store.scan()
+    _unreadable_hint(errors)
+
+    order = {"normal": 0, "personal": 1, "sensitive": 2, "secret": 3}
+    findings_list = []
+    for entry in entries:
+        level, flags = classify(entry.body)
+        if order[level] > order[entry.sensitivity]:
+            findings_list.append((entry, level, flags))
+
+    for entry, level, flags in findings_list:
+        print(f"{entry.id}  {entry.sensitivity} -> {level}  "
+              f"[{', '.join(flags)}]  {entry.status}")
+    if not findings_list:
+        print(f"no unmarked sensitive content in {len(entries)} entries")
+        return 0
+
+    print(f"\n{len(findings_list)} of {len(entries)} entries look under-classified")
+    if not args.apply:
+        print("run with --apply to raise them (this may move entries to blocked)")
+        return 0
+
+    changed = 0
+    for entry, level, flags in findings_list:
+        if entry.status == "approved" and level in ("sensitive", "secret"):
+            print(f"skip {entry.id}: approved; reject or archive it first", file=sys.stderr)
+            continue
+        entry.sensitivity = level
+        entry.trust = entry.infer_trust()
+        entry.updated_at = now_iso()
+        store.save(entry)
+        changed += 1
+    print(f"{changed} entries re-classified")
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
     entries, errors = store.scan()
@@ -702,6 +747,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--level", required=True, choices=("normal", "personal", "sensitive", "secret")
     )
     p_sens.set_defaults(func=cmd_sensitivity)
+
+    p_audit = sub.add_parser(
+        "audit",
+        parents=[vault_arg],
+        help="find entries whose sensitivity looks too low (P5-03)",
+    )
+    p_audit.add_argument("--apply", action="store_true", help="raise the levels")
+    p_audit.set_defaults(func=cmd_audit)
 
     p_log = sub.add_parser(
         "log", parents=[vault_arg], help="summarise recent changes from the vault's git history"

@@ -269,7 +269,26 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
   "Cursor 给 propose、Claude 给 read" 只是安全剧场。stdio 下唯一可信的边界是启动者。
 - 未被授予的工具**根本不注册**，所以 `tools/list` 就是真实能力，客户端不会看到一个调不通的工具。
 - **任何级别都没有 `memory_write`**：`propose` 只能进待审队列，`admin` 也只是多一个只读的 `memory_status`。
-| P5-03 | 敏感信息检测与排除规则 | 明显密钥被阻断，`doctor` 有对应检查 |
+| P5-03 | 敏感信息检测与排除规则 | ✅ 完成（两刀） |
+
+**第一刀（密钥）**：`safety.py` 认 6 类凭证形状；`memory_propose` 命中即 `secret` → blocked。
+
+**第二刀（PII，真实使用后补）**：真实导入暴露了更严重的问题 —— `MEMORY.md` 里的住址/籍贯/学校
+全部以 `normal` 落地，一旦批准就会经 MCP 流出。新增分级：
+
+| 级别 | 触发 | 后果 |
+|---|---|---|
+| `secret` | 凭证形状 | `blocked`，不可批准 |
+| `sensitive` | 身份证 / 手机号 / 银行卡 / 完整住址 | `blocked`，需人工降级 |
+| `personal` | 城市、区县、学校等弱信号 | 仅标记，不阻断 |
+
+**刻意分强弱**：把每个城市名都当敏感会让"在上海读书四年"被拦，规则一旦频繁误报就会被无视，
+连真信号一起失效。
+
+`memoryhub audit [--apply]` 用同一套分类器复查**已有**条目的 body，报告等级偏低者并可批量提升；
+已批准的条目不会被静默改级，会提示先 reject/archive。
+
+**真机结果**：42 条里 10 条偏低（1 条完整住址 → blocked，9 条学校/籍贯 → personal）。
 | P5-04 | `memoryhub backup`：本地 commit + 可选远端 | 远端不可用时本地提交成功、任务进重试 |
 
 **P5-01 进度：4/5 完成（2026-11-24）**
