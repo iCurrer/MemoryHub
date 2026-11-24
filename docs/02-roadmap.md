@@ -67,20 +67,23 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 - **实际结果**：38 → 45 个测试。三个额外处理记在 ADR-005：YAML 1.2 布尔规则、时间戳还原为字符串、重复键报错。
 - **遗留**：`AGENTS.md` 的"测试可在无第三方包的机器上跑通"对阶段 2 不再成立，待所有者修订措辞。
 
-### P2-02 SQLite 索引 + FTS5 trigram
+### P2-02 SQLite 索引 + FTS5 trigram ✅
 
-- **目标**：`search` 从目录扫描改为索引查询，中文可检索。
-- **落位**：新建 `src/memoryhub/storage/index.py`
+- **落位**：`src/memoryhub/storage/index.py`；CLI `index` 命令；`search` 自动使用
 - **依赖**：P2-01
-- **要点**：
-  - 建表记录 `id / category / status / updated_at / path / content_hash`
-  - FTS5 使用 `tokenize='trigram'`（默认 `unicode61` 对中文无效，见 ADR 与 `docs/03-plan-review.md` 第 17 条）
-  - `rebuild()` 能从 `vault/` 全量重建；删除 `database/index.db` 后 `search` 仍可工作（自动重建）
-- **完成判据**：
-  1. 中文短语（≥3 字）可命中；新增对应测试。
-  2. 删除索引文件后调用 `search` 自动重建且结果一致。
-  3. `doctor` 增加"索引与 Markdown 一致性"检查项。
-- **禁止**：索引成为唯一数据源；任何字段只存索引不存 Markdown。
+- **实际落地**：
+  - 表：`entries`（id/category/status/updated_at/path/content_hash/body/tags）、`files`（path/mtime_ns/size）、`meta`（tokenizer/built_at）+ `entries_fts`
+  - 分词：优先 `trigram`，装不上才退 `unicode61`（`meta.tokenizer` 记录实际值，`doctor` 会显示）
+  - 新鲜度：每轮 `stat` 全部条目文件比对 `files` 表 —— stat 比解析便宜得多，所以每次 `search` 都能承受；任何外部编辑都会被发现并触发重建
+  - **1-2 字的中文查询走 `LIKE` 兜底**：trigram 匹配不了 3 字以下，返回空会被误读成"记忆没了"
+  - `rebuild()` 用**真实文件路径**写入，不用 `target_path()` 推算（避免 status 与位置不一致时索引记错路径）
+  - 索引坏掉时 `search` 回退全表扫描并告警，**索引永远不能把搜索拖死**
+- **完成判据**（全部达成，`tests/test_index.py` 9 例）：
+  1. 中文短语（≥3 字）可命中 —— `开发项目` / `优先考虑` 均命中。
+  2. 删除 `index.db` 后 `search` 自动重建且结果一致 —— 三个查询前后逐一对齐。
+  3. `doctor` 增加 index 检查（absent/stale = WARN，broken = FAIL）。
+  4. 额外：外部编辑触发重建、新条目被发现、Markdown 仍是唯一真相源。
+- **禁止项遵守**：索引没有 Markdown 之外的字段；删库即失忆这件事有测试兜底。
 
 ### P2-03 Adapter 接口与能力声明 ✅
 

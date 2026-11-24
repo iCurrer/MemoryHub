@@ -22,6 +22,7 @@ LAYOUT = (
     "inbox/pending",
     "inbox/conflicts",
     "inbox/rejected",
+    "database",
     "sources",
     "exports",
     "logs",

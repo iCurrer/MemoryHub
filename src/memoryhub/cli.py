@@ -13,6 +13,7 @@ from . import __version__, config
 from .adapters import ADAPTERS, build
 from .frontmatter import FrontmatterError
 from .models import CATEGORIES, STATUSES, MemoryEntry, ValidationError, now_iso
+from .storage.index import Index, IndexUnavailable
 from .storage.markdown_store import LockTimeout, VaultStore
 from .watcher import import_entries, watch
 
@@ -146,6 +147,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     )
     for path, message in unreadable:
         print(f"  unreadable {path}: {message}", file=sys.stderr)
+
+    report = Index(vault).check(store)
+    index_level = {"ok": "OK", "absent": "WARN", "stale": "WARN", "broken": "FAIL"}[
+        report["state"]
+    ]
+    add("index", index_level, report["detail"])
 
     sync_hits = [part for part in vault.parts if part.lower().startswith("onedrive")]
     add(
@@ -294,6 +301,24 @@ def cmd_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_index(args: argparse.Namespace) -> int:
+    """Build, rebuild, or report the SQLite index (P2-02)."""
+    store = _store(args)
+    index = Index(store.root)
+    if args.rebuild:
+        count = index.rebuild(store)
+        print(f"rebuilt  {index.path}")
+        print(f"entries  {count}")
+        return 0
+    rebuilt = index.ensure_fresh(store)
+    report = index.check(store)
+    print(f"index    {index.path}")
+    print(f"state    {report['state']}  ({report['detail']})")
+    if rebuilt:
+        print("note     index was stale and has been rebuilt")
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
     entries, errors = store.scan()
@@ -329,7 +354,18 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     store = _store(args)
-    hits = store.search(args.query, include_expired=args.include_expired)
+    hits: List[MemoryEntry] = []
+    index = Index(store.root)
+    try:
+        index.ensure_fresh(store)
+        entries = (store.get(entry_id) for entry_id in index.search_ids(args.query))
+        hits = [entry for entry in entries if entry is not None]
+        if not args.include_expired:
+            hits = [entry for entry in hits if not entry.is_expired()]
+    except IndexUnavailable as exc:
+        # The index is a cache; never let it take search down with it.
+        print(f"warning: index unavailable ({exc}); falling back to a full scan", file=sys.stderr)
+        hits = store.search(args.query, include_expired=args.include_expired)
     for entry in hits:
         _print_entry_line(entry)
     print(f"\n{len(hits)} matches for {args.query!r}")
@@ -446,6 +482,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="report what would be imported without writing anything",
     )
     p_scan.set_defaults(func=cmd_scan)
+
+    p_index = sub.add_parser(
+        "index", parents=[vault_arg], help="build or report the SQLite index"
+    )
+    p_index.add_argument("--rebuild", action="store_true", help="force a full rebuild")
+    p_index.set_defaults(func=cmd_index)
 
     p_watch = sub.add_parser(
         "watch", parents=[vault_arg], help="poll sources and import changes"
