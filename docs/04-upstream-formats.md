@@ -296,8 +296,46 @@ Codex 是"近的覆盖远的"，Claude 是"层级拼接 + local 在后"，Cursor
 | 8 | Claude Desktop 的 auto-memory 目录到底在哪 | 应用装了（`%LOCALAPPDATA%\Claude-Data`），但本机**搜不到任何 `MEMORY.md`**；技能正文说"目录由系统提示定义"，即运行期才知道。可能在 `IndexedDB`/`Local Storage` 或云端 |
 | 9 | Claude Desktop 的 MCP 配置写在哪 | `%APPDATA%\Claude\claude_desktop_config.json` **不存在**（README 提到 `%APPDATA%\Claude` 是旧版本残留路径）；新位置未定位 |
 
-## 9. 怎么复核（复制即用）
+## 8.5 候选来源清单（未适配，按"有没有真·本地记忆"分档）
 
+判据不是"这个工具有没有规则文件"，而是**它会不会自己往磁盘写记忆**。
+
+### A. 有真·本地自动记忆（agent 自己写，可直接采集）
+
+| 工具 | 记忆落点 | 格式 | 置信度 | 适配成本 |
+|---|---|---|---|---|
+| **Cherry Studio** | `%APPDATA%\CherryStudio\Data\Agents\<agent>\`：`SOUL.md`、`USER.md`、`memory\FACT.md` | Markdown | **实盘** | **低** —— 与已实现的 WorkBuddy persona 同构 |
+| **Gemini CLI** | `~/.gemini/GEMINI.md`（全局偏好）+ 仓库 `GEMINI.md`（项目指令）+ **per-project private memory 目录**（路径官方未写，待核） | Markdown | 官方 | 低 —— 指令层复用 `sections()` |
+| Windsurf | "Cascade Memories"（官方承认有记忆，**落盘位置未核实**） | 未核实 | 官方 | 中 |
+| Cline / Roo Code | 项目内 `memory-bank/*.md`，由提示词驱动 agent 维护 | Markdown | 官方（最佳实践） | 低，但要用户给项目根 |
+| 已适配 | Codex、Claude Code/Desktop、WorkBuddy、Trae CN | — | — | 见前文各节 |
+
+### B. 只有「指令」没有「记忆」（agent 只读，人写）
+
+Cursor（`.cursor/rules/*.mdc`）、GitHub Copilot（`.github/copilot-instructions.md`）、Continue（`.continue/rules`）、Aider（`CONVENTIONS.md`）、Zed（`.rules`）。
+这些值得采，但只能标 `source_kind=instruction`，**不要当人格记忆**（AGENTS.md 的硬规则）。
+
+### C. 本机装了但没有可采记忆
+
+| 工具 | 实盘看到什么 |
+|---|---|
+| GitHub Copilot CLI | `~/.copilot/`：`config.json` + `session-state/`（会话状态，不是记忆） |
+| Tencent CodeBuddy | `~/.codebuddy/`：`diagnostics/`、`logs/`、`skills/`，未见记忆库 |
+| DSH（本 harness） | `~/.dsh/`：`profiles/`、`sessions/`、`storages/`、`skills/`（会话，不是记忆） |
+| Claude Desktop | 云端（见 §3.0） |
+
+### D. 一个正在成型的公共形状
+
+WorkBuddy 的 `user-*-personal/{IDENTITY,SOUL,USER,MEMORY}.md`、Cherry Studio 的
+`Agents/<agent>/{SOUL,USER,memory/FACT}.md`、Claude 的 `memory/{MEMORY.md, 主题}.md`
+—— **三者是同一个套路**：人格文件（SOUL/USER/IDENTITY）+ 记忆文件（MEMORY/FACT）+ 索引。
+
+这意味着两件事：
+
+1. 写一个通用的「人格目录适配器」可能比给每个工具写一个更划算；
+2. 这套形状**没有版本、没有来源、没有时效**。谁先把它做成可审计的，谁就占了那一格 —— 但那是产品判断，不是格式判断。
+
+## 9. 怎么复核（复制即用）
 ```powershell
 # 1. 哪些 agent 目录真的存在
 Get-ChildItem $env:USERPROFILE -Directory -Force |
