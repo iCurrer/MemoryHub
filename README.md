@@ -67,9 +67,10 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 **其他**
 
-- CLI：`init` `doctor` `new` `scan` `watch` `index` `mcp` `list` `show` `search` `approve` `reject` `stats`
+- CLI：`init` `doctor` `new` `scan` `watch` `index` `diff` `mcp` `list` `show` `search` `approve` `reject` `stats`
 - **索引**：SQLite FTS5 + trigram，中文可检索；删掉 `database/index.db` 会自动重建，结果不变
-- 116 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、1 个真实 MCP stdio 握手），全部通过
+- **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
+- 124 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、1 个真实 MCP stdio 握手），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 
@@ -156,7 +157,7 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 | 1.5 | 加固：id 碰撞、读不出即报错、门禁分级、过期过滤 | 完成（ADR-009） |
 | 2 | 采集适配器、文件监控、哈希去重、SQLite FTS5 索引 | **完成** |
 | 3 | AI 整理（仅产出提案）、冲突检测、Pydantic 校验 | 未开始 |
-| 4 | 审核流 + 差异预览（CLI） | 未开始 |
+| 4 | 审核流 + 差异预览（CLI） | **P4-01 / P4-02 完成**，`log` 未做 |
 | 5 | MCP stdio、Git 自动备份 | **MCP 4/5 完成**（`memory_status` 与权限分级未做） |
 | 6 | 打包（PyInstaller）、开机常驻、基础 Web UI | 未开始 |
 

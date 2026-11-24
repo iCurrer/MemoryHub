@@ -36,13 +36,14 @@
 | `src/memoryhub/mcp/server.py` | 只读 MCP 三件套 + 可见性规则（ADR-012） | 稳定（P5-01 3/5） |
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
 | `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析 | 稳定（注意：`save()` 会整份重写，加配置项前先改成合并写入） |
-| `src/memoryhub/cli.py` | 13 个命令 | 稳定，命令会继续增加 |
+| `src/memoryhub/cli.py` | 15 个命令 | 稳定，命令会继续增加 |
 | `tests/test_store.py` | 30 个用例 | 会随功能增长 |
 | `tests/test_cli.py` | 19 个端到端用例 | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
 | `tests/test_adapters.py` | 27 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude 适配器 |
 | `tests/test_mcp.py` | 9 个用例 | 可见性规则 + 真实 stdio 握手（含 stdout 纯净性断言） |
 | `tests/test_watcher.py` | 11 个用例 | 防抖/哈希/排除 + 注入时钟 |
 | `tests/test_index.py` | 9 个用例 | 中文、删库重建一致、外部编辑、兜底 |
+| `tests/test_cli.py` 审核流部分 | 8 个用例 | diff 自动配对 / 批量 approve / blocked 跳过 |
 
 可用命令：`init` `doctor` `new` `scan` `mcp` `list` `show` `search` `approve` `reject` `stats`
 
@@ -65,7 +66,7 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 116 passed
+python -m unittest discover -s tests -v          # 期望 124 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）

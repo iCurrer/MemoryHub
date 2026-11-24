@@ -210,6 +210,88 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("0 source(s)", out)
 
+    # ------------------------------------------------------- review flow
+
+    def make(self, body: str, category: str = "preference", **extra: str) -> str:
+        self.init_vault()
+        argv = ["new", "--category", category, "--body", body]
+        for key, value in extra.items():
+            argv.extend([f"--{key.replace('_', '-')}", value])
+        code, out, err = self.run_cli(*argv)
+        self.assertEqual(code, 0, err)
+        return out.split()[0]
+
+    def test_diff_shows_changed_lines_against_same_source(self) -> None:
+        first = self.make("prefers pnpm", source_path="C:/x/CLAUDE.md", adapter="claude")
+        self.run_cli("approve", first)
+        second = self.make(
+            "prefers pnpm and not yarn", source_path="C:/x/CLAUDE.md", adapter="claude"
+        )
+        code, out, err = self.run_cli("diff", second)
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"against  {first}", out)
+        self.assertIn("-prefers pnpm", out)
+        self.assertIn("+prefers pnpm and not yarn", out)
+        self.assertIn("C:/x/CLAUDE.md", out)
+
+    def test_diff_with_explicit_against(self) -> None:
+        first = self.make("alpha")
+        second = self.make("beta")
+        code, out, _err = self.run_cli("diff", second, "--against", first)
+        self.assertEqual(code, 0)
+        self.assertIn("-alpha", out)
+        self.assertIn("+beta", out)
+
+    def test_diff_without_counterpart_prints_the_body(self) -> None:
+        only = self.make("solo fact", source_path="C:/y/CLAUDE.md")
+        code, out, _err = self.run_cli("diff", only)
+        self.assertEqual(code, 0)
+        self.assertIn("nothing to compare against", out)
+        self.assertIn("solo fact", out)
+
+    def test_diff_on_missing_id_is_an_error(self) -> None:
+        self.init_vault()
+        code, _out, err = self.run_cli("diff", "mem_20200101T000000_deadbeef")
+        self.assertEqual(code, 1)
+        self.assertIn("no such memory", err)
+
+    def test_approve_all_skips_blocked_entries(self) -> None:
+        ok = self.make("a normal preference")
+        blocked = self.make("api key: sk-abcdefghijklmnopqrstuvwx123456",
+                            category="knowledge", sensitivity="sensitive")
+        code, out, err = self.run_cli("approve", "--all")
+        self.assertEqual(code, 0)
+        self.assertIn(f"approved  {ok}", out)
+        self.assertNotIn(blocked, out.split("blocked")[0])
+        self.assertIn("1 blocked", err)
+        _c, listed, _e = self.run_cli("list", "--status", "approved")
+        self.assertIn("1 entries", listed)
+
+    def test_approve_all_filters_by_category(self) -> None:
+        self.make("a preference")
+        profile = self.make("a profile fact", category="profile")
+        code, out, _err = self.run_cli("approve", "--all", "--category", "profile")
+        self.assertEqual(code, 0)
+        self.assertIn(profile, out)
+        self.assertIn("1 approved", out)
+        _c, listed, _e = self.run_cli("list", "--status", "pending")
+        self.assertIn("1 entries", listed)
+
+    def test_approve_all_dry_run_writes_nothing(self) -> None:
+        self.make("a preference")
+        code, out, _err = self.run_cli("approve", "--all", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("would be approved", out)
+        _c, listed, _e = self.run_cli("stats")
+        self.assertIn("pending", listed)
+        self.assertNotIn("approved", listed)
+
+    def test_approve_without_id_or_all_is_a_usage_error(self) -> None:
+        self.init_vault()
+        code, _out, err = self.run_cli("approve")
+        self.assertEqual(code, 2)
+        self.assertIn("--all", err)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,20 @@ MIN_PYTHON = (3, 11)
 
 
 def _store(args: argparse.Namespace) -> VaultStore:
-    return VaultStore(config.resolve_vault(getattr(args, "vault", None)))
+    """Resolve the vault and refuse to invent one.
+
+    Without this check every command silently wrote into the hard-coded default
+    (`D:/my-memory`), which is how a test run once polluted a real path.
+    """
+    root = config.resolve_vault(getattr(args, "vault", None))
+    if not root.is_dir():
+        print(
+            f"error: vault not found: {root}\n"
+            f"       run `memoryhub init --vault {root}` first",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return VaultStore(root)
 
 
 def _print_entry_line(entry: MemoryEntry) -> None:
@@ -319,6 +333,123 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _counterpart(store: VaultStore, entry: MemoryEntry) -> Optional[MemoryEntry]:
+    """Newest approved entry from the same source file, if any."""
+    entries, _errors = store.scan()
+    candidates = [
+        other
+        for other in entries
+        if other.id != entry.id
+        and other.status == "approved"
+        and other.source_path == entry.source_path
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item.updated_at)
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    """Show a proposal next to the entry it would replace (P4-01)."""
+    store = _store(args)
+    try:
+        entry = store.get(args.id)
+    except (ValidationError, FrontmatterError) as exc:
+        print(f"error: {args.id} cannot be read: {exc}", file=sys.stderr)
+        return 1
+    if entry is None:
+        print(f"error: no such memory: {args.id}", file=sys.stderr)
+        return 1
+
+    against: Optional[MemoryEntry] = None
+    if args.against:
+        try:
+            against = store.get(args.against)
+        except (ValidationError, FrontmatterError) as exc:
+            print(f"error: {args.against} cannot be read: {exc}", file=sys.stderr)
+            return 1
+        if against is None:
+            print(f"error: no such memory: {args.against}", file=sys.stderr)
+            return 1
+    else:
+        against = _counterpart(store, entry)
+
+    def describe(label: str, item: MemoryEntry) -> None:
+        print(f"{label:<9}{item.id}")
+        print(f"{'':<9}{item.status}  {item.category}  trust={item.trust}  "
+              f"updated {item.updated_at}")
+        print(f"{'':<9}source {item.source_adapter} / {item.source_kind} / "
+              f"{item.source_path or '(none)'}")
+        if item.tags:
+            print(f"{'':<9}tags   {', '.join(item.tags)}")
+
+    describe("proposal", entry)
+    if against is None:
+        print()
+        print("no approved entry from the same source yet -- nothing to compare against")
+        print()
+        print(entry.body, end="")
+        return 0
+
+    print()
+    describe("against", against)
+    print()
+    diff = difflib.unified_diff(
+        against.body.splitlines(),
+        entry.body.splitlines(),
+        fromfile=f"{against.id} ({against.status})",
+        tofile=f"{entry.id} ({entry.status})",
+        lineterm="",
+        n=3,
+    )
+    lines = list(diff)
+    if not lines:
+        print("bodies are identical; only metadata differs")
+        return 0
+    for line in lines:
+        print(line)
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    """Approve one entry, or a filtered batch (P4-02)."""
+    store = _store(args)
+    if not args.all:
+        if not args.id:
+            print("error: give an id, or pass --all to approve a batch", file=sys.stderr)
+            return 2
+        return cmd_set_status(args, "approved")
+
+    entries, errors = store.scan()
+    _unreadable_hint(errors)
+    targets = [entry for entry in entries if entry.status == "pending"]
+    if args.category:
+        targets = [entry for entry in targets if entry.category == args.category]
+    if args.tag:
+        targets = [entry for entry in targets if args.tag in entry.tags]
+
+    blocked = [entry for entry in targets if entry.trust == "blocked"]
+    approvable = [entry for entry in targets if entry.trust != "blocked"]
+
+    if args.dry_run:
+        for entry in approvable:
+            print(f"would approve  {entry.id}  {entry.category:<10} {entry.body.splitlines()[0][:48]}")
+        print(f"\n{len(approvable)} would be approved, {len(blocked)} blocked")
+        return 0
+
+    approved = 0
+    for entry in approvable:
+        store.set_status(entry.id, "approved")
+        approved += 1
+        print(f"approved  {entry.id}  {entry.category:<10} {entry.body.splitlines()[0][:48]}")
+    if blocked:
+        print(
+            f"\n{len(blocked)} blocked entry(ies) skipped: lower the sensitivity first",
+            file=sys.stderr,
+        )
+    print(f"\n{approved} approved, {len(blocked)} blocked")
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
     entries, errors = store.scan()
@@ -535,11 +666,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_search.set_defaults(func=cmd_search)
 
-    p_ok = sub.add_parser(
-        "approve", parents=[vault_arg], help="approve a pending proposal"
+    p_diff = sub.add_parser(
+        "diff", parents=[vault_arg], help="compare a proposal with the entry it would replace"
     )
-    p_ok.add_argument("id")
-    p_ok.set_defaults(func=lambda a: cmd_set_status(a, "approved"))
+    p_diff.add_argument("id")
+    p_diff.add_argument("--against", default=None, help="compare with this id instead")
+    p_diff.set_defaults(func=cmd_diff)
+
+    p_ok = sub.add_parser(
+        "approve", parents=[vault_arg], help="approve one proposal, or a filtered batch"
+    )
+    p_ok.add_argument("id", nargs="?", default=None)
+    p_ok.add_argument("--all", action="store_true", help="approve every matching pending entry")
+    p_ok.add_argument("--category", choices=CATEGORIES, default=None)
+    p_ok.add_argument("--tag", default=None, help="only entries carrying this tag")
+    p_ok.add_argument("--dry-run", action="store_true", help="list what would be approved")
+    p_ok.set_defaults(func=cmd_approve)
 
     p_no = sub.add_parser(
         "reject", parents=[vault_arg], help="reject a pending proposal"

@@ -215,9 +215,19 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 | 工单 | 内容 | 完成判据 |
 |---|---|---|
-| P4-01 | 差异预览：`memoryhub diff <id>` 对比提案与现有条目 | 输出可读 diff，标出来源与时间 |
-| P4-02 | 批量操作：`inbox list --auto` / 批量 approve | 支持按 category 批批，不逐条点 |
-| P4-03 | 变更摘要：`memoryhub log --since 7d` | 用于每周回看（补 ADR-003 的代价项） |
+| P4-01 | 差异预览：`memoryhub diff <id>` 对比提案与现有条目 | ✅ 完成 |
+| P4-02 | 批量操作：`inbox list --auto` / 批量 approve | ✅ 完成（`approve --all` + `--category` / `--tag` / `--dry-run`） |
+| P4-03 | 变更摘要：`memoryhub log --since 7d` | ⬜ 未做 |
+
+**P4-01 实际落地**：`diff <id>` 默认自动配对 —— 取**同一 `source_path` 的最新已批准条目**作为对比对象，
+输出元信息（状态/类别/信任/来源/时间）+ 统一 diff；`--against <id>` 可显式指定；无配对时打印正文并说明原因。
+
+**P4-02 实际落地**：`approve --all`，可按 `--category` / `--tag` 过滤，`--dry-run` 只列出。
+**blocked 永远跳过**（打印到 stderr），不因为批量操作就绕过 ADR-003。
+
+**顺带修掉一个真隐患**：`new` / `list` 等命令此前不检查 vault 是否存在，config 未写入时会
+静默写到硬编码的 `D:/my-memory`。一次测试运行真的把数据写进了那里。现在 `_store()` 直接报错并
+提示 `init`，有测试覆盖。
 
 ---
 
