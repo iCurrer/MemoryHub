@@ -68,7 +68,7 @@ cd /d/project/MemoryHub
 pip install pyyaml          # 唯一的运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 132 passed
+python -m unittest discover -s tests -v          # 期望 136 passed
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -116,7 +116,7 @@ Claude Desktop 放在 `%APPDATA%\Claude\claude_desktop_config.json`；Cursor 放
 | 4 | 无 `LICENSE` 文件 | 公开仓默认"保留所有权利"，与开源定位矛盾 | **待拍板**，倾向 Apache-2.0 |
 | 5 | `config.save()` 整份重写配置 | 阶段 3 加 `ai.*` 后，`init` 会把它们抹掉 | 阶段 3 前改成合并 |
 | 6 | `supersedes` 不做引用存在性校验，可悬空 | 取代链是核心资产，却没有完整性检查 | 阶段 3 冲突检测时补 |
-| 7 | `status` 字段与文件位置是两个真相源 | 手改 `status` 不会移动文件；**保存过期快照会把已批准条目搬回 inbox**（P4-03 写测试时实测到，git 里表现为 A inbox + D vault） | 已在 `save()` 文档里写明，需在存储层加乐观并发校验 |
+| 7 | `status` 字段与文件位置是两个真相源 | 手改 `status` 不会移动文件。保存过期快照曾把已批准条目搬回 inbox（P4-03 写测试时实测到）。**已加乐观并发校验**：`_base_updated_at` 与磁盘不一致时抛 `StaleEntryError`。剩余局限：时间戳是秒级，同一秒内的并发写入检测不到 | 已修复主路径；如需同秒保护，把 `now_iso` 改成微秒 |
 | 8 | `AGENTS.md`「测试必须能在无第三方包的机器上跑通」已不成立 | 新增了 `pyyaml` 依赖，新人按契约描述会以为不用装 | **待所有者改措辞**，见 ADR-005 |
 
 （已清：frontmatter 读不出块列表 —— P2-01 解决，见 ADR-005。）

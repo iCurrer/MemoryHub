@@ -71,7 +71,8 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - **索引**：SQLite FTS5 + trigram，中文可检索；删掉 `database/index.db` 会自动重建，结果不变
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目
-- 132 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、1 个真实 MCP stdio 握手），全部通过
+- 保存前校验快照是否过期（`StaleEntryError`），不会把已批准的条目误降级
+- 136 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、1 个真实 MCP stdio 握手），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 

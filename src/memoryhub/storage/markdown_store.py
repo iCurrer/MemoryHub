@@ -30,6 +30,18 @@ class LockTimeout(RuntimeError):
     """Raised when the vault lock cannot be acquired in time."""
 
 
+class StaleEntryError(ValidationError):
+    """Raised when a write would clobber a version newer than the caller holds.
+
+    Background: ``save`` derives the target path from ``entry.status``, so saving
+    a stale snapshot used to restore an approved entry into ``inbox/pending`` --
+    silently undoing a review. This guard turns that into an error.
+
+    Limitation: ``updated_at`` has second granularity, so a competing write inside
+    the same second is not detected.
+    """
+
+
 class IdCollisionError(ValidationError):
     """Raised when a write would reuse an id that already has an owner.
 
@@ -283,11 +295,30 @@ class VaultStore:
         with VaultLock(self.lock_path):
             target = self.target_path(entry)
             self._refuse_foreign_owner(entry)
+            self._refuse_stale(entry)
             atomic_write_text(target, entry.to_markdown())
             for other in self.paths_for_id(entry.id):
                 if other != target:
                     other.unlink(missing_ok=True)
+        entry._base_updated_at = entry.updated_at
         return target
+
+    def _refuse_stale(self, entry: MemoryEntry) -> None:
+        """Refuse to overwrite a version that changed since this object was loaded."""
+        base = entry._base_updated_at
+        if base is None:
+            return  # never loaded from disk: a fresh object, nothing to compare
+        for path in self.paths_for_id(entry.id):
+            try:
+                existing = self.load(path)
+            except (ValidationError, frontmatter.FrontmatterError, OSError):
+                continue
+            if existing.updated_at != base:
+                raise StaleEntryError(
+                    f"{entry.id} changed on disk (updated_at {existing.updated_at}, "
+                    f"this object was loaded at {base}); reload it with `store.get()` "
+                    "before saving"
+                )
 
     def _refuse_foreign_owner(self, entry: MemoryEntry) -> None:
         """Best-effort net under ``save``: never clobber a different entry.

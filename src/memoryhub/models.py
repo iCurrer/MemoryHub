@@ -95,6 +95,10 @@ class MemoryEntry:
     superseded_by: Optional[str] = None
     tags: List[str] = field(default_factory=list)
     extra: Dict[str, Any] = field(default_factory=dict)
+    #: ``updated_at`` as it was on disk when this object was loaded. Never
+    #: serialised, never compared for equality: it exists so ``save`` can tell
+    #: "I am the current version" from "someone else wrote after I read this".
+    _base_updated_at: Optional[str] = field(default=None, repr=False, compare=False)
 
     # ------------------------------------------------------------------ ids
 
@@ -269,6 +273,7 @@ class MemoryEntry:
             kwargs["tags"] = []
         entry = cls(body=body, **kwargs)
         entry.extra = {k: v for k, v in meta.items() if k not in _KNOWN_KEYS}
+        entry._base_updated_at = entry.updated_at
         entry.validate()
         return entry
 

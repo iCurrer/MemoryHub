@@ -1,5 +1,6 @@
 from .markdown_store import (
     IdCollisionError,
+    StaleEntryError,
     LockTimeout,
     VaultLock,
     VaultStore,
@@ -11,5 +12,6 @@ __all__ = [
     "VaultLock",
     "LockTimeout",
     "IdCollisionError",
+    "StaleEntryError",
     "atomic_write_text",
 ]

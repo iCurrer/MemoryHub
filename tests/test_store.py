@@ -16,7 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from memoryhub import frontmatter  # noqa: E402
 from memoryhub.models import MemoryEntry, ValidationError  # noqa: E402
-from memoryhub.storage.markdown_store import IdCollisionError, VaultStore  # noqa: E402
+from memoryhub.storage.markdown_store import (
+    IdCollisionError,
+    StaleEntryError,
+    VaultStore,
+)  # noqa: E402
 
 
 class FrontmatterTests(unittest.TestCase):
@@ -304,6 +308,53 @@ class StoreTests(unittest.TestCase):
         )
         self.assertEqual(self.store.search("rust"), [])
         self.assertEqual(len(self.store.search("rust", include_expired=True)), 1)
+
+    # ------------------------------------------------- concurrency guard
+
+    def approved_entry(self) -> MemoryEntry:
+        entry = MemoryEntry.create(category="preference", body="prefers python")
+        self.store.create(entry)
+        self.store.set_status(entry.id, "approved")
+        return self.store.get(entry.id)
+
+    def test_save_refuses_a_snapshot_older_than_disk(self) -> None:
+        # The bug this guards: saving a stale snapshot re-derives the path from its
+        # own status, which used to move an approved entry back into inbox/pending.
+        stale = self.approved_entry()
+
+        other = self.store.get(stale.id)
+        other.body = "changed by another writer\n"
+        other.updated_at = "2999-01-01T00:00:00+08:00"  # make the ordering explicit
+        self.store.save(other)
+
+        stale.body = "my stale edit\n"
+        with self.assertRaises(StaleEntryError) as caught:
+            self.store.save(stale)
+        self.assertIn("reload it", str(caught.exception))
+
+        on_disk = self.store.get(stale.id)
+        self.assertIn("changed by another writer", on_disk.body)
+        self.assertEqual(on_disk.status, "approved")
+
+    def test_reloaded_object_saves_normally(self) -> None:
+        entry = self.approved_entry()
+        fresh = self.store.get(entry.id)
+        fresh.body = "prefers python 3.12\n"
+        self.store.save(fresh)
+        self.assertIn("3.12", self.store.get(entry.id).body)
+
+    def test_status_transitions_still_work_on_a_stale_read(self) -> None:
+        # set_status reloads internally, so holding an old object must not break it.
+        entry = self.approved_entry()
+        self.store.set_status(entry.id, "archived")
+        self.assertEqual(self.store.get(entry.id).status, "archived")
+
+    def test_brand_new_entry_has_no_baseline_and_saves(self) -> None:
+        entry = MemoryEntry.create(category="knowledge", body="first write")
+        self.store.create(entry)
+        entry.body = "first write, slightly longer\n"
+        self.store.save(entry)
+        self.assertIn("slightly longer", self.store.get(entry.id).body)
 
 
 if __name__ == "__main__":
