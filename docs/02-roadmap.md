@@ -289,7 +289,21 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 已批准的条目不会被静默改级，会提示先 reject/archive。
 
 **真机结果**：42 条里 10 条偏低（1 条完整住址 → blocked，9 条学校/籍贯 → personal）。
-| P5-04 | `memoryhub backup`：本地 commit + 可选远端 | 远端不可用时本地提交成功、任务进重试 |
+| P5-04 | `memoryhub backup`：本地 commit + 可选远端 | ✅ 完成 |
+
+**P5-04 实际落地**：`memoryhub backup [--remote NAME] [--allow-sensitive]`。
+
+两条规则（写进 `backup/git.py` 的模块 docstring）：
+
+1. **本地提交永远安全，推送不是。** 所以提交总是发生，安全闸只装在推送路径上 ——
+   拒绝提交只会丢历史，不会更安全。
+2. **闸门看内容，不看意图。** 只要库里有 `sensitive` / `secret`（因而 `blocked`）的条目，
+   `--remote` 就拒绝并列出 id；`--allow-sensitive` 是给"已经想清楚并接受代价"的人用的，不是默认。
+
+附带：`backup` 会自动补 `.gitignore`（`database/`、`logs/`、临时文件、锁文件），
+且**不覆盖用户已有内容**；派生状态（索引里存着每条记忆的全文）因此不会被提交。
+
+真机验证：本地提交 `061bb4d`（42 条）；`--remote origin` 被拒，列出那条 sensitive 条目。
 
 **P5-01 进度：4/5 完成（2026-11-24）**
 

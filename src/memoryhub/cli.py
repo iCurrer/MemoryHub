@@ -13,7 +13,17 @@ from typing import List, Optional, Tuple
 
 from . import __version__, config
 from .adapters import ADAPTERS, build
-from .backup import HistoryUnavailable, collect, summarise
+from .backup import (
+    GitUnavailable,
+    HistoryUnavailable,
+    collect,
+    commit as git_commit,
+    ensure_repo,
+    push as git_push,
+    sensitive_entries,
+    summarise,
+    write_gitignore,
+)
 from .frontmatter import FrontmatterError
 from .models import CATEGORIES, STATUSES, MemoryEntry, ValidationError, now_iso
 from .safety import classify
@@ -573,6 +583,60 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backup(args: argparse.Namespace) -> int:
+    """Commit the vault, and optionally push it to a remote (P5-04).
+
+    The commit always happens: a local commit is offline and reversible. The push
+    is gated on content, because once it leaves the machine it cannot be recalled.
+    """
+    store = _store(args)
+    try:
+        created = ensure_repo(store.root)
+        if write_gitignore(store.root):
+            print("gitignore updated (database/, logs/, temp files are now excluded)")
+        if created:
+            print(f"initialised git repository in {store.root}")
+
+        sha = git_commit(store.root, args.message)
+        if sha is None:
+            print("nothing to commit")
+        else:
+            print(f"committed {sha}")
+    except GitUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if not args.remote:
+        return 0
+
+    flagged = sensitive_entries(store)
+    if flagged and not args.allow_sensitive:
+        print(
+            f"\nrefusing to push: {len(flagged)} entr(ies) are sensitive or blocked",
+            file=sys.stderr,
+        )
+        for entry in flagged:
+            print(f"  {entry.id}  {entry.sensitivity}  {entry.status}", file=sys.stderr)
+        print(
+            "\noptions: run `memoryhub audit` to classify, `memoryhub sensitivity <id> "
+            "--level normal` to release one, or pass --allow-sensitive to push anyway",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        ok, detail = git_push(store.root, args.remote)
+    except GitUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not ok:
+        print(f"error: push failed: {detail}", file=sys.stderr)
+        print("hint: the local commit is safe; remote failure is retryable", file=sys.stderr)
+        return 1
+    print(detail)
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
     entries, errors = store.scan()
@@ -747,6 +811,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--level", required=True, choices=("normal", "personal", "sensitive", "secret")
     )
     p_sens.set_defaults(func=cmd_sensitivity)
+
+    p_backup = sub.add_parser(
+        "backup",
+        parents=[vault_arg],
+        help="commit the vault; optionally push it to a remote",
+    )
+    p_backup.add_argument("--message", default="memoryhub: backup", help="commit message")
+    p_backup.add_argument(
+        "--remote", default=None, help="git remote to push to (omit for a local commit only)"
+    )
+    p_backup.add_argument(
+        "--allow-sensitive",
+        action="store_true",
+        help="push even though sensitive/blocked entries exist",
+    )
+    p_backup.set_defaults(func=cmd_backup)
 
     p_audit = sub.add_parser(
         "audit",

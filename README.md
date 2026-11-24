@@ -59,6 +59,13 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - `scan`：一次性采集，按内容指纹去重，`--dry-run` 可预览
 - `watch`：2 秒轮询 + 防抖 + 哈希，只导入真正变化的文件（`--once` 供 cron/测试）
 
+**备份（P5-04）**
+
+- `memoryhub backup`：把库提交到它自己的 git 仓库（离线、可回滚），并自动补 `.gitignore`
+- `memoryhub backup --remote backup`：推送到远端；**只要库里有 sensitive/secret 条目就拒绝**，
+  列出 id 并给出三条出路（audit 分类 / 降级 / `--allow-sensitive` 明确承担代价）
+- 本地提交永远执行：拒绝提交只会丢历史，不会更安全
+
 **敏感分级（P5-03）**
 
 - 凭证形状（`sk-` / `ghp_` / `AKIA` / 私钥块 / `Bearer` / `key: xxx`）→ `secret` → **blocked**
@@ -77,12 +84,12 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 **其他**
 
-- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `sensitivity` `stats`
+- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `sensitivity` `backup` `stats`
 - **索引**：SQLite FTS5 + trigram，中文可检索；删掉 `database/index.db` 会自动重建，结果不变
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目
 - 保存前校验快照是否过期（`StaleEntryError`），不会把已批准的条目误降级
-- 155 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、2 个真实 MCP stdio 会话），全部通过
+- 163 个单元测试（含 19 个 CLI 端到端、11 个 watcher、9 个索引、2 个真实 MCP stdio 会话），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 

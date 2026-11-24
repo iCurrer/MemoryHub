@@ -6,6 +6,17 @@ the vault look like before, and can we get it back.
 
 from __future__ import annotations
 
+from .git import (
+    GITIGNORE_LINES,
+    GitUnavailable,
+    commit,
+    ensure_repo,
+    has_changes,
+    push,
+    remotes,
+    sensitive_entries,
+    write_gitignore,
+)
 from .history import (
     Change,
     Commit,
@@ -17,6 +28,15 @@ from .history import (
 )
 
 __all__ = [
+    "GITIGNORE_LINES",
+    "GitUnavailable",
+    "commit",
+    "ensure_repo",
+    "has_changes",
+    "push",
+    "remotes",
+    "sensitive_entries",
+    "write_gitignore",
     "Change",
     "Commit",
     "HistoryUnavailable",
