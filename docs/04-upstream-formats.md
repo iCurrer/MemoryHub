@@ -174,6 +174,16 @@ consolidation_progress(singleton, max_thread_count)
 > 对 MemoryHub 的含义：`type` ↔ 我们的 `category`、`modified` ↔ `updated_at` 可直接映射。这是**目前最容易做对**的适配器。
 >
 > **补充实测**：`<project>` 按**工作目录**派生，不是按 git 仓 —— 在 `%TEMP%\claudetest` 跑一次 `claude`，立刻多出 `projects\C--Users-...-claudetest\memory\`。项目目录会不断增殖。
+>
+> **更重要的实测（2026-11-24）**：用户让 Claude 学了一批关于自己的记忆之后 ——
+> `~/.claude/CLAUDE.md` 从 337 B 长到 **15,144 B（6,622 字符 / 170 行 / 16 个大节）**，
+> 而 `projects/*/memory/` **仍然是空的**。
+>
+> 也就是说：**实际承载"关于用户"的是全局 `CLAUDE.md`，不是文档描述的 auto-memory 目录。**
+> 适配器的处理：`layer=global` 的指令文件按 `category=profile` 入库（仍是 `source_kind=instruction`，仍走 review），
+> `layer=project` 的按 `category=decision`。真机导入结果：17 条，全部 pending。
+>
+> 推论：auto-memory 那一层在当前版本可能默认没启用/没触发。不要为它先写适配逻辑。
 
 ---
 
@@ -306,7 +316,7 @@ Codex 是"近的覆盖远的"，Claude 是"层级拼接 + local 在后"，Cursor
 
 | # | 项 | 状态 |
 |---|---|---|
-| 1 | Claude Code 的 `<project>` 目录命名规则 | 官方只有文字描述；本机**未安装 Claude Code**（无 `~/.claude`），无实例 |
+| 1 | Claude Code 的 auto-memory 文件格式（`type`/`modified` frontmatter） | `projects/*/memory/` 目录存在但**始终为空**；实际写入点是全局 `CLAUDE.md`（见 §3.3）。该格式仍只有官方文档支撑 |
 | 2 | WorkBuddy 的 `<uuid>` 是用户还是工作区 | uuid 且与 `.workbuddy/<uuid>/` 同名，疑似工作区；无官方文档 |
 | 3 | WorkBuddy 是否还有别的记忆载体 | 已找到三种（§5），**是否还有第四种未知**；`workspace-state.json`（190 B）结构未验证 |
 | 4 | Codex `project_doc_max_bytes` 等默认值 | 来自镜像，非官方页 |
@@ -327,7 +337,7 @@ Codex 是"近的覆盖远的"，Claude 是"层级拼接 + local 在后"，Cursor
 | **Gemini CLI** | `~/.gemini/GEMINI.md`（全局偏好）+ 仓库 `GEMINI.md`（项目指令）+ **per-project private memory 目录**（路径官方未写，待核） | Markdown | 官方 | 低 —— 指令层复用 `sections()` |
 | Windsurf | "Cascade Memories"（官方承认有记忆，**落盘位置未核实**） | 未核实 | 官方 | 中 |
 | Cline / Roo Code | 项目内 `memory-bank/*.md`，由提示词驱动 agent 维护 | Markdown | 官方（最佳实践） | 低，但要用户给项目根 |
-| **Cherry Studio** | `Data\Agents\<agent>\`：`USER.md`（对该用户的认知）、`memory\FACT.md`（长期知识）。**`SOUL.md` 是助手自己的性格，不是用户记忆** | Markdown | **实盘** | 已适配（`cherry`），但**默认只采用户自建的 agent**；本机只有内置的 `cherry-support`，故发现 0 条 |
+| ~~Cherry Studio~~ | `Data\Agents\<agent>\`：`SOUL.md`（助手性格）/ `USER.md` / `memory/FACT.md`。**SOUL 属于助手，不是用户**；内置 agent 的内容是产品模板 | Markdown | 实盘 | **已取消**（2026-11-24 所有者决定）。曾实现后删除：本机唯一 agent 是内置的，无用户记忆可采 |
 | 已适配 | Codex、Claude Code/Desktop、WorkBuddy、Trae CN | — | — | 见前文各节 |
 
 ### B. 只有「指令」没有「记忆」（agent 只读，人写）

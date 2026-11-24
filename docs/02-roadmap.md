@@ -124,6 +124,8 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 - **`<workspace>/.workbuddy/memory/`**：`MEMORY.md` + 按天文件 `YYYY-MM-DD.md`，**未适配**。工作区路径不能从 home 推导，需要用户给根目录（或读 `workspace-state.json`，结构未验证）
 - 注意：WorkBuddy 的 `MEMORY.md` 是**按标题分组的正文**，Claude 的 `MEMORY.md` 是**链接索引**（`- [Title](file.md)`）。**不要共用解析器。**
 
+**2026-11-24 取消 Cherry Studio 适配**（所有者决定）：该工具的 `SOUL.md` 属于助手而非用户，且本机只有内置 agent、无用户记忆可采。已删除 `adapters/cherry.py`，连同只被它使用的 `adapters/persona.py`。
+
 ### P2-04 Codex 适配器 ✅
 
 - **落位**：`src/memoryhub/adapters/codex.py`

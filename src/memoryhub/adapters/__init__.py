@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Dict, List, Type
 
 from .base import Adapter, SourcePath, bullets, sections, slug, strip_quoted_metadata
-from .cherry import CherryStudioAdapter
 from .claude import ClaudeAdapter
 from .codex import CodexAdapter
 from .workbuddy import WorkBuddyAdapter
@@ -19,7 +18,6 @@ from .workbuddy import WorkBuddyAdapter
 ADAPTERS: Dict[str, Type[Adapter]] = {
     WorkBuddyAdapter.name: WorkBuddyAdapter,
     ClaudeAdapter.name: ClaudeAdapter,
-    CherryStudioAdapter.name: CherryStudioAdapter,
     CodexAdapter.name: CodexAdapter,
 }
 
@@ -46,6 +44,5 @@ __all__ = [
     "strip_quoted_metadata",
     "WorkBuddyAdapter",
     "ClaudeAdapter",
-    "CherryStudioAdapter",
     "CodexAdapter",
 ]

@@ -191,10 +191,13 @@ class ClaudeAdapter(Adapter):
                 tags.append(slug)
             entries.append(
                 MemoryEntry.create(
-                    # An instruction section is a standing decision about how the
-                    # AI must behave, so it is filed as `decision` -- which
-                    # ADR-003 routes to human review rather than auto-approval.
-                    category="decision",
+                    # Layer decides the category. A *user-scope* CLAUDE.md is where
+                    # Claude Code actually writes what it learned about the person
+                    # (observed on a real install: 6.6k chars / 16 sections in
+                    # ~/.claude/CLAUDE.md while projects/*/memory/ stayed empty),
+                    # so it is filed as `profile`. Project-scope files are standing
+                    # rules -> `decision`. Both still go to review per ADR-003.
+                    category="profile" if source.layer == "global" else "decision",
                     body=body + "\n",
                     tags=tags,
                     source_adapter=self.name,
