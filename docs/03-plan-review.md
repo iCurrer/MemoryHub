@@ -52,3 +52,14 @@
 | 22 | `inbox/rejected/` 持久保留 | 拒绝过的提案不能被下一轮扫描无条件重新导入，否则用户要反复拒绝同一件事 |
 | 23 | 记忆 ID 与文件路径解耦 | 移动文件不改变 ID，否则取代链会断 |
 | 24 | `extra` 字段透传未知 frontmatter | 前向兼容：未来版本写入的字段，旧版本读写不应丢失 |
+
+## 六、已被证据修正的判断（2026-11-24 核实）
+
+依据：[`04-upstream-formats.md`](04-upstream-formats.md)（实盘 + 官方文档，含置信度与未验证清单）。
+
+| # | 原判断 | 位置 | 核实结果 | 影响 |
+|---|---|---|---|---|
+| 25 | 把 `AGENTS.md` 当作 Codex 的记忆来源；隐含"一个工具 = 一个记忆文件" | 4.2、13.2 | **`AGENTS.md` 是指令，不是记忆**。Codex 的记忆在 `~/.codex/memories_1.sqlite`（`stage1_outputs`，带 `usage_count`）+ `sessions/**/*.jsonl.zst`；Claude 在 `~/.claude/projects/<project>/memory/`；Trae 在 `session_memory_*.jsonl` | P2-04 的完成判据已重写；Codex 记忆层需单独立工单 |
+| 26 | 指令是"一个文件"，采集它即可 | 4.2 | 指令是**有序链**：Codex 从 git root 往下、越近越覆盖（32 KiB 截断）；Claude 从 cwd 往上拼接、`local` 在后；Cursor 按 `globs`/`description` 条件加载 | 只存 `source_path` 会丢失"哪条生效"，见 ADR-011 第 2 条 |
+| 27 | "YAML Frontmatter" 暗示输入输出同构 | 6.2 | **输出**侧 vault 全部 Markdown；**输入**侧是 md / jsonl / zstd-jsonl / sqlite 异构 | ADR-011 第 3 条；P2-03 接口不得绑死 markdown |
+| 28 | `AGENTS.md` 在 Claude 里一定生效 | 4.2 | 默认 `claude-md-or-agents-md`：**有 `CLAUDE.md` 就不读 `AGENTS.md`**（需 ≥ v2.1.277） | 本仓库自身就是 `AGENTS.md` + `CLAUDE.md` 并存，Claude 侧只读后者 |

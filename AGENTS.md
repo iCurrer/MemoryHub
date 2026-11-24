@@ -32,6 +32,7 @@ MemoryHub 是**跨 AI 工具的个人记忆治理层**：采集各 AI 工具的�
 | `docs/01-decisions.md` | ADR 决策记录 | 当次改动人追加 |
 | `docs/02-roadmap.md` | 工单与阶段门禁 | 当次改动人勾销 |
 | `docs/03-plan-review.md` | 策划书 ↔ 决定的对照表 | 决策变更时更新 |
+| `docs/04-upstream-formats.md` | 上游记忆来源的路径/格式基线（实盘 + 官方文档，含置信度） | 新增来源或上游大版本变更时更新 |
 | `docs/reference/` | 策划书原文与转换版，**只读** | 不收改动 |
 
 ## 已定决策（不可推翻，改了要先写 ADR）

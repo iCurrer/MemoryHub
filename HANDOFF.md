@@ -8,7 +8,7 @@
 
 ## 1. 一句话现状
 
-阶段 1 核心数据层已跑通：记忆可以创建、落盘、审批、检索、归档，有原子写入和文件锁保护，**38 个单元测试全绿**。阶段 1.5 的加固把三处会静默丢数据/失联的路径堵掉了（见 ADR-009）。**采集适配器、AI 整理、MCP、备份命令都还没有。**
+阶段 1 核心数据层已跑通：记忆可以创建、落盘、审批、检索、归档，有原子写入和文件锁保护，**38 个单元测试全绿**。阶段 1.5 的加固把三处会静默丢数据/失联的路径堵掉了（见 ADR-009）。上游来源的路径与格式已实测核实（[`docs/04-upstream-formats.md`](docs/04-upstream-formats.md)）。**采集适配器、AI 整理、MCP、备份命令都还没有。**
 
 ## 2. 仓库信息
 
@@ -91,14 +91,20 @@ python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 
 
 还有一条**未决**：`project` 分类在 ADR-003 的信任表里没有归属，当前落 `auto`。这是代码替人做的决定，见 ADR-010，需要所有者二选一。
 
+以及 ADR-011（三条一起拍）：`source_kind` 扩展、`precedence`/`layer` 字段、"Markdown 只是输出侧的真相源"。**P2-03 开工前必须定。**
+
 ## 8. 下一步
 
-执行 `docs/02-roadmap.md` 的 **P2-01**：把 `frontmatter.py` 迁到 PyYAML。
+**第一步**：执行 `docs/02-roadmap.md` 的 **P2-01**：把 `frontmatter.py` 迁到 PyYAML。
 
 理由见已知问题 #1：它不是"格式不优雅"，而是**用户手改一次就把记忆弄丢**。在所有 adapter 解析真实 `AGENTS.md` 之前必须先换掉，否则会基于错误的数据格式写两遍。
 
+**第二步之前必须先拍板 ADR-011**（三条：`source_kind` 扩展、`precedence`/`layer` 字段、"Markdown 只是输出真相源"）。不拍板就开 P2-03，等于用错的形状设计接口，之后要改两次。
+
 P2-01 之后建议的顺序调整（需所有者点头，见 roadmap 末尾"建议调整"一节）：
 先 P2-03/P2-04 打通单源闭环，再回头做 P2-02 索引。
+
+**关于首个适配器选谁**（建议，未生效）：按 [`docs/04-upstream-formats.md`](docs/04-upstream-formats.md) 的证据，Trae CN 与 WorkBuddy 是**纯 Markdown / JSONL，零解压、零 SQLite**，比 Codex（zstd-jsonl + sqlite）简单得多。若目标是"两周内跑通一次真实闭环"，首个适配器选它们更划算；Codex 的指令层仍应做，因为它是跨工具的公共格式。
 
 ## 9. 给接手者的提醒
 

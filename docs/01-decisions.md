@@ -206,3 +206,34 @@
 2. `project` → `auto`：承认现状，但要在 ADR-003 里补上这一行。
 
 **在拍板之前**：代码保持 `auto`（不擅自改决定），`tests/test_store.py::test_decision_category_needs_review` 不动，本 ADR 记录该缺口。
+
+---
+
+## ADR-011 输入是异构的：格式基线 + 两个待定的字段扩展
+
+**状态**：待所有者拍板（2026-11-24 记录，未生效）
+
+**背景**：核实上游来源后（证据与置信度见 [`04-upstream-formats.md`](04-upstream-formats.md)），三件事与现有设计不符：
+
+1. `AGENTS.md` 是**指令**，不是记忆。Codex 的记忆在 `~/.codex/memories_1.sqlite`（表 `stage1_outputs`，带 `usage_count` / `last_usage`），会话原文在 `sessions/**/rollout-*.jsonl.zst`；Claude Code 的记忆在 `~/.claude/projects/<project>/memory/`（`MEMORY.md` 索引 + 主题文件，frontmatter 带 `type` 与 `modified`）；Trae 的记忆是 `session_memory_*.jsonl`（`intent` / `actions` / `outcome` / `learned`）。策划书 §4.2 把 `AGENTS.md` 当作 Codex 的记忆来源，这个判断是错的。
+2. 指令是**有序链**，不是单个文件。Codex 从 git root 往下走、越近越靠后覆盖前面的（并有 32 KiB 截断）；Claude 从 cwd 往上拼接、同目录 `CLAUDE.local.md` 排在后；Cursor 用 `globs` / `description` 条件加载。只存 `source_path` 表达不了"哪条生效"。
+3. `source_kind` 的 `memory` 值太笼统，无法区分"工具自动写的记忆"与"从会话蒸馏的结构化记忆"。
+
+**待定决策（三条，需分别点头）**：
+
+| # | 建议 | 若不采纳的后果 |
+|---|---|---|
+| 1 | `source_kind` 扩展为 `instruction` / `auto_memory` / `session_distill` / `profile` / `doc`（`memory` 保留为兼容值） | 冲突裁决无法区分"指令冲突"与"记忆冲突"，`auto` 信任级的适用范围说不清 |
+| 2 | `MemoryEntry` 增加 `precedence: int` 与 `layer: str`（`global` / `project` / `local` / `nested`） | Codex 的覆盖语义、Claude 的加载顺序在入库时丢失，事后无法还原 |
+| 3 | 明确写入：**"Markdown 是唯一真相源"仅指输出侧（vault）**，输入侧允许 md / jsonl / zstd-jsonl / sqlite | P2-03 的接口会被"只解析 md"绑死，写第二遍是必然 |
+
+**为什么这三条要一起拍**：它们共同决定 `MemoryEntry` 的字段集。分开改会连续破坏 `from_markdown` / `to_meta` 的稳定性，而字段语义是本项目明确要求"宁可不写功能也不要改"的东西。
+
+**代价**：
+
+- 采纳第 2 条要动 `models.py` 的字段集与 `_KNOWN_KEYS`，并补 `extra` 之外的兼容测试；已冻结的"字段已冻结"声明需要一份新的 ADR 修订。
+- 第 3 条需要在 `AGENTS.md` 第 6 条上加一句限定，属于改契约文件，**只能由所有者动**。
+
+**在拍板之前**：`models.py` 不动。适配器开发不启动（避免基于错的形状写两遍）。P2-01（PyYAML）可以照常做，它与此无关。
+
+**复审时点**：P2-03 开工前必须拍板；`docs/04-upstream-formats.md` 每次上游大版本更新后复核。

@@ -84,27 +84,49 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 - **目标**：定义外部来源接入协议，后续所有适配器实现它。
 - **落位**：新建 `src/memoryhub/adapters/base.py`
-- **依赖**：P2-01
+- **依赖**：P2-01；**开工前必须先拍板 ADR-011**（`source_kind` 扩展与 `precedence` / `layer` 字段）
+- **格式依据**：[`04-upstream-formats.md`](04-upstream-formats.md)。**不要**照着策划书 §4.2 的猜测设计接口
 - **要点**：
   - `discover() -> list[SourcePath]`：探测可能的来源路径，返回置信度
   - `read(path) -> list[MemoryEntry]`：只读解析，产出 `status=pending`
   - `capabilities`：声明 `can_read` / `can_write`（`can_write` 恒为 `False`，见 ADR-002）
   - 每个 adapter 必须声明 `name` 与 `source_kind` 默认值
-- **完成判据**：一个 `DummyAdapter` 的测试可完整跑通 discover → read → 落 inbox。
+  - **输入不一定是 Markdown**：接口必须以"字节流 / 路径"为输入，由 adapter 自己决定解析 md、jsonl 还是 sqlite；不得在 base 里写 `read_text()`
+  - **有序来源必须带序**：Codex 的指令链、Claude 的目录层级、Cursor 的 globs 都是有序的，`SourcePath` 需携带 `precedence` / `layer`（若 ADR-011 第 2 条被采纳）
+- **完成判据**：
+  1. 一个 `DummyAdapter` 的测试可完整跑通 discover → read → 落 inbox。
+  2. 一个**非 Markdown** 的 `DummyJsonlAdapter` 也能跑通同一条链路（证明接口没绑死 markdown）。
+  3. 同一 adapter 返回的两条来源能保序（`precedence` 不丢失）。
 
 ### P2-04 Codex 适配器
 
 - **落位**：`src/memoryhub/adapters/codex.py`
-- **依赖**：P2-03
-- **要点**：目标是 `AGENTS.md`（全局 + 项目级）。**必须标记 `source_kind="instruction"`**，不得当作人格记忆。
-- **完成判据**：给定一个含多级标题的 `AGENTS.md`，能产出多条 `source_kind=instruction` 的 pending 条目，且 `source_path` / `source_hash` 正确。
+- **依赖**：P2-03、ADR-011
+- **要点**（按 [`04-upstream-formats.md`](04-upstream-formats.md) §2 修正，原工单描述已过时）：
+  - 指令层**不是单个文件**：`$CODEX_HOME/AGENTS.override.md` → `AGENTS.md`（只取第一个非空），再按 git root → cwd 逐层查 `AGENTS.override.md` → `AGENTS.md` → `project_doc_fallback_filenames`，每层最多一个
+  - **必须标记 `source_kind="instruction"`**，不得当作人格记忆；并记录 `layer`（global/project/nested）与链中位置
+  - 要处理 `project_doc_max_bytes`（默认 32 KiB）的截断：超出部分上游根本看不到，不能假装读到了
+  - 记忆层是另一个工单：`memories_1.sqlite`（表 `stage1_outputs`）与 `sessions/**/*.jsonl.zst` 是 `session_distill`，**不在本工单范围**
+- **完成判据**：
+  1. 给定一个"全局 + 根 + 嵌套 override"的三层目录树，能产出 3 条 `source_kind=instruction` 的 pending 条目，`source_path` / `source_hash` / `layer` / `precedence` 全部正确。
+  2. `AGENTS.md` 被 `AGENTS.override.md` 遮蔽时，被遮蔽的那条不产出（或标为 shadowed）。
+  3. 超过 `project_doc_max_bytes` 时，明确报"已截断"而不是静默少内容。
+  4. 路径不存在时给出可操作提示（而不是 traceback）。
 
 ### P2-05 Claude Code 适配器
 
 - **落位**：`src/memoryhub/adapters/claude.py`
-- **依赖**：P2-03
-- **要点**：路径不硬编码。启动时探测 → 让用户确认 → 记住配置。版本差异要降级为"用户手动指定路径"而不是报错退出。
-- **完成判据**：路径不存在时给出可操作提示（而不是 traceback）；路径存在时与 P2-04 同标准。
+- **依赖**：P2-03、ADR-011
+- **要点**（按 [`04-upstream-formats.md`](04-upstream-formats.md) §3）：
+  - 指令层：`~/.claude/CLAUDE.md`、`./CLAUDE.md`、`./.claude/CLAUDE.md`、`./CLAUDE.local.md`、`.claude/rules/*.md`（可带 `paths:` frontmatter）
+  - 记忆层：`~/.claude/projects/<project>/memory/`，`MEMORY.md` 是索引，主题文件是单条记忆
+  - **映射已有元数据**：frontmatter 的 `type`（`user`/`feedback`/`project`/`reference`）→ `category`，`modified` → `updated_at`，不要丢弃
+  - **不要假设 `AGENTS.md` 生效**：默认 `claude-md-or-agents-md` 下，有 `CLAUDE.md` 就不读 `AGENTS.md`
+  - 路径不硬编码，启动时探测 → 让用户确认 → 记住配置；版本差异降级为"用户手动指定路径"而不是报错退出
+- **完成判据**：
+  1. 路径不存在时给出可操作提示（而不是 traceback）；路径存在时与 P2-04 同标准。
+  2. 给定一个 `memory/` 目录（`MEMORY.md` + 2 个带 `type` 的主题文件），能产出 2 条 `source_kind=auto_memory` 的 pending 条目，`category` 与 `updated_at` 来自 frontmatter 而不是默认值。
+  3. `MEMORY.md` 的 200 行 / 25KB 加载上限被如实反映（超出部分标为未加载，不假装读到了）。
 
 ### P2-06 文件监控 + 防抖 + 哈希去重
 
