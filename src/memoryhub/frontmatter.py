@@ -91,7 +91,13 @@ def dump_scalar(value: Any) -> str:
 
 
 def split(text: str) -> Tuple[Dict[str, Any], str]:
-    """Split a document into (metadata, body)."""
+    """Split a document into (metadata, body).
+
+    A leading UTF-8 BOM is stripped: Windows editors and the clipboard still
+    produce one, and it would otherwise hide the whole frontmatter block.
+    """
+    if text.startswith("\ufeff"):
+        text = text[1:]
     if not text.startswith(DELIM):
         return {}, text
     lines = text.splitlines(keepends=True)

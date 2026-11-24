@@ -14,9 +14,10 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from .. import frontmatter
 from ..config import LAYOUT
@@ -27,6 +28,15 @@ _SAFE_ID_RE = re.compile(r"^mem_[0-9A-Za-z_]+$")
 
 class LockTimeout(RuntimeError):
     """Raised when the vault lock cannot be acquired in time."""
+
+
+class IdCollisionError(ValidationError):
+    """Raised when a write would reuse an id that already has an owner.
+
+    Phase 1 used a 4-hex id suffix, so bulk import could mint the same id twice
+    and ``save`` would silently overwrite the first entry. Creating an entry now
+    refuses instead.
+    """
 
 
 class VaultLock:
@@ -178,28 +188,60 @@ class VaultStore:
     def load(self, path: Path) -> MemoryEntry:
         return MemoryEntry.from_markdown(Path(path).read_text(encoding="utf-8"))
 
-    def iter_entries(self, strict: bool = False) -> Iterator[MemoryEntry]:
-        import sys
+    def iter_entries(
+        self,
+        strict: bool = False,
+        errors: Optional[List[Tuple[Path, str]]] = None,
+    ) -> Iterator[MemoryEntry]:
+        """Yield entries; unreadable files are reported, never silently dropped.
 
+        ``errors`` collects ``(path, message)`` pairs for the caller to surface.
+        When it is ``None`` a warning goes to stderr, which keeps the old
+        behaviour for callers that just want entries.
+        """
         for path in self.entry_paths():
             try:
                 yield self.load(path)
-            except (ValidationError, frontmatter.FrontmatterError) as exc:
+            except (
+                ValidationError,
+                frontmatter.FrontmatterError,
+                OSError,
+                UnicodeDecodeError,
+                TypeError,
+            ) as exc:
+                # TypeError is a last resort: a single hand-broken file must not
+                # abort the whole scan, and ``scan``/``doctor`` still report it.
                 if strict:
                     raise
-                print(f"warning: skipped malformed entry {path}: {exc}", file=sys.stderr)
+                if errors is not None:
+                    errors.append((path, str(exc)))
+                else:
+                    print(
+                        f"warning: skipped unreadable entry {path}: {exc}",
+                        file=sys.stderr,
+                    )
+
+    def scan(
+        self, strict: bool = False
+    ) -> Tuple[List[MemoryEntry], List[Tuple[Path, str]]]:
+        """Load the whole vault once: ``(entries, unreadable)``."""
+        errors: List[Tuple[Path, str]] = []
+        entries = list(self.iter_entries(strict=strict, errors=errors))
+        return entries, errors
 
     def get(self, entry_id: str) -> Optional[MemoryEntry]:
         for path in self.paths_for_id(entry_id):
             return self.load(path)
         return None
 
-    def search(self, query: str) -> List[MemoryEntry]:
+    def search(self, query: str, include_expired: bool = False) -> List[MemoryEntry]:
         needle = query.strip().lower()
         if not needle:
             return []
         hits: List[MemoryEntry] = []
         for entry in self.iter_entries():
+            if not include_expired and entry.is_expired():
+                continue
             haystack = [entry.body.lower(), entry.id.lower()]
             haystack.extend(tag.lower() for tag in entry.tags)
             if any(needle in field for field in haystack):
@@ -208,15 +250,60 @@ class VaultStore:
 
     # --------------------------------------------------------------- write
 
+    def create(self, entry: MemoryEntry) -> Path:
+        """Write a brand-new entry; refuse if its id is already taken.
+
+        This is the only entry point new content should use (CLI ``new``, and
+        later the adapters). ``save`` stays the in-place update used by status
+        transitions, where overwriting the same id is expected.
+        """
+        entry.validate()
+        with VaultLock(self.lock_path):
+            occupied = self.paths_for_id(entry.id)
+            if occupied:
+                raise IdCollisionError(
+                    f"id {entry.id} already belongs to {occupied[0]}; "
+                    "refusing to overwrite it"
+                )
+            target = self.target_path(entry)
+            atomic_write_text(target, entry.to_markdown())
+        return target
+
     def save(self, entry: MemoryEntry) -> Path:
+        """Upsert an entry that already exists, or one that is about to."""
         entry.validate()
         with VaultLock(self.lock_path):
             target = self.target_path(entry)
+            self._refuse_foreign_owner(entry)
             atomic_write_text(target, entry.to_markdown())
             for other in self.paths_for_id(entry.id):
                 if other != target:
                     other.unlink(missing_ok=True)
         return target
+
+    def _refuse_foreign_owner(self, entry: MemoryEntry) -> None:
+        """Best-effort net under ``save``: never clobber a different entry.
+
+        ``created_at`` is second-granular, so two entries born in the same
+        second are indistinguishable here; ``create`` is the real guarantee.
+        """
+        for path in self.paths_for_id(entry.id):
+            try:
+                existing = self.load(path)
+            except (
+                ValidationError,
+                frontmatter.FrontmatterError,
+                OSError,
+                UnicodeDecodeError,
+            ) as exc:
+                raise IdCollisionError(
+                    f"refusing to overwrite an unreadable file at {path}: {exc}"
+                ) from exc
+            if existing.created_at != entry.created_at:
+                raise IdCollisionError(
+                    f"id {entry.id} belongs to an entry created at "
+                    f"{existing.created_at}, not {entry.created_at}"
+                )
 
     def set_status(self, entry_id: str, status: str) -> MemoryEntry:
         entry = self.get(entry_id)
@@ -249,11 +336,17 @@ class VaultStore:
     # --------------------------------------------------------------- stats
 
     def stats(self) -> Dict[str, Any]:
+        entries, errors = self.scan()
         by_status: Dict[str, int] = {}
         by_category: Dict[str, int] = {}
         total = 0
-        for entry in self.iter_entries():
+        for entry in entries:
             total += 1
             by_status[entry.status] = by_status.get(entry.status, 0) + 1
             by_category[entry.category] = by_category.get(entry.category, 0) + 1
-        return {"total": total, "by_status": by_status, "by_category": by_category}
+        return {
+            "total": total,
+            "by_status": by_status,
+            "by_category": by_category,
+            "unreadable": len(errors),
+        }

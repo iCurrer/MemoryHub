@@ -2,8 +2,8 @@
 
 跨 AI 工具的个人记忆治理层。本地优先、可审计、可迁移。
 
-> **状态：阶段 1 骨架，尚未发布。** 目前只有记忆模型、存储层、CLI 基础命令和测试；
-> 采集适配器、AI 整理、审核界面、MCP 服务均未实现。请不要把它当作可用工具使用。
+> **状态：阶段 1 骨架 + 阶段 1.5 加固，尚未发布。** 目前只有记忆模型、存储层、CLI
+> 基础命令和测试；采集适配器、AI 整理、审核界面、MCP 服务均未实现。请不要把它当作可用工具使用。
 
 ---
 
@@ -38,12 +38,18 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 ## 当前已实现
 
 - `MemoryEntry` 领域模型：分类、状态、信任级、敏感级、来源、时效字段
-- 零依赖 frontmatter 读写（受限 YAML 子集）
-- 原子写入 + 跨进程文件锁；一个 id 只对应一个文件
+- 零依赖 frontmatter 读写（受限 YAML 子集，含 UTF-8 BOM 剥离）
+- 原子写入 + 跨进程文件锁；一个 id 只对应一个文件；**id 复用会被拒绝而不是覆盖**
 - `inbox`（待审）与 `vault`（正式）之间的流转，不留重复文件
-- 三级信任策略：`auto` / `review` / `blocked`，敏感条目禁止直接批准
+- 三级信任策略：`auto` / `review` / `blocked`；`review` 级别直接批准需显式 `--force`，敏感条目禁止批准
+- 时效裁决：`valid_until` 已过期的条目默认不出现在 `list` / `search` 里（`--include-expired` 打开）
+- 读不了的 `.md` 不会被静默跳过：`list` / `search` 告警，`stats` 计数，`doctor` 判 FAIL
 - CLI：`init` `doctor` `new` `list` `show` `search` `approve` `reject` `stats`
-- 15 个单元测试，全部通过
+- 38 个单元测试（含 15 个 CLI 端到端用例），全部通过
+
+> **已知限制**：frontmatter 解析器只认扁平 `key: value` 与内联列表。如果你在 Obsidian 里
+> 把 `tags: [dev]` 改成块列表 `tags:` 换行 `  - dev`，这条记忆就读不出来（会报错，不会静默丢失）。
+> 这是阶段 2 第一个工单 P2-01 要解决的问题。
 
 ## 快速开始
 
@@ -98,6 +104,7 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 1 | 记忆模型、存储层、原子写入、CLI、测试 | 骨架完成 |
+| 1.5 | 加固：id 碰撞、读不出即报错、门禁分级、过期过滤 | 完成（ADR-009） |
 | 2 | 采集适配器（Codex / Claude Code）、文件监控、哈希去重、SQLite FTS5 索引（trigram） | 未开始 |
 | 3 | AI 整理（仅产出提案）、冲突检测、Pydantic 校验 | 未开始 |
 | 4 | 审核流 + 差异预览（CLI） | 未开始 |
@@ -122,7 +129,7 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 | [`AGENTS.md`](AGENTS.md) | 工程契约：7 条不可推翻的决策、编码约定、明确禁止。**AI Agent 必读** |
 | [`HANDOFF.md`](HANDOFF.md) | 现状交接：做到哪、怎么跑、已知问题、下一步 |
 | [`docs/00-positioning.md`](docs/00-positioning.md) | 定位与竞品差异 |
-| [`docs/01-decisions.md`](docs/01-decisions.md) | 8 条 ADR，含每条决策的代价与复审时点 |
+| [`docs/01-decisions.md`](docs/01-decisions.md) | ADR 记录：已定 9 条 + 1 条待决，含每条的代价与复审时点 |
 | [`docs/02-roadmap.md`](docs/02-roadmap.md) | 阶段拆解与可领工单 |
 | [`docs/03-plan-review.md`](docs/03-plan-review.md) | 策划书 ↔ 当前决定的对照表（防止做回已否决功能） |
 | [`docs/reference/`](docs/reference/) | 项目策划书原文与可读版，只读 |

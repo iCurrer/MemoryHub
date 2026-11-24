@@ -27,7 +27,26 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 | P1-03 | 原子写入 + 跨进程锁 | 完成 |
 | P1-04 | inbox ↔ vault 流转，无重复文件 | 完成 |
 | P1-05 | CLI 9 命令 | 完成 |
-| P1-06 | 15 个单元测试 | 完成 |
+| P1-06 | 15 个单元测试 | 完成（现 38 个） |
+
+---
+
+## 阶段 1.5 · 加固 ✅
+
+评审后发现的静默丢数据 / 失联 / 门禁矛盾，已在进入阶段 2 之前修完。决策记录见 ADR-009。
+
+| 工单 | 内容 | 状态 |
+|---|---|---|
+| P1.5-01 | id 后缀 4→8 hex；`store.create()` 拒绝 id 复用，不再静默覆盖 | 完成 |
+| P1.5-02 | 读失败显式上报：`scan()` 返回 errors，`doctor` 判 FAIL，CLI 汇总告警 | 完成 |
+| P1.5-03 | `--vault` 子命令前后都生效（此前前置写法被静默丢弃） | 完成 |
+| P1.5-04 | `--approve` 对 `review` 级别需 `--force`，`blocked` 不可越过 | 完成 |
+| P1.5-05 | `doctor` 分 FAIL / WARN，`init --no-git` 后门禁可过 | 完成 |
+| P1.5-06 | `confidence=low` 归入 `review`（补齐 ADR-003 明文） | 完成 |
+| P1.5-07 | 查询默认过滤过期条目，`--include-expired` 打开（ADR-006） | 完成 |
+| P1.5-08 | 类型校验（tags/supersedes/时间戳/id），残缺 frontmatter 不再抛 TypeError | 完成 |
+| P1.5-09 | 剥离 UTF-8 BOM（Windows 编辑器写入后 frontmatter 会整块失效） | 完成 |
+| P1.5-10 | 错误路径不再出栈：缺文件、锁超时、坏 frontmatter 均给可读错误 | 完成 |
 
 ---
 
@@ -39,10 +58,11 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 - **落位**：`src/memoryhub/frontmatter.py`（保留同名函数签名 `split` / `join`，内部换实现）
 - **依赖**：无。本工单同时引入项目第一个运行时依赖，需在 `pyproject.toml` 声明 `pyyaml`。
 - **完成判据**：
-  1. 现有 15 个测试全绿，且 `test_rejects_nested_yaml` 改为断言"嵌套 YAML 可正常解析"。
+  1. 现有 38 个测试全绿，且 `test_rejects_nested_yaml` 改为断言"嵌套 YAML 可正常解析"。
   2. 新增测试：写出的 `.md` 用 PyYAML 独立 `safe_load` 能解析通过。
   3. 新增测试：含多行字符串、嵌套 `source:` 列表的 frontmatter 可往返。
-  4. `docs/01-decisions.md` 的 ADR-005 追加"部分取代"说明。
+  4. 新增测试：Obsidian 写出的块列表（`tags:\n  - dev`）与 BOM 前缀文件都能读出。
+  5. `docs/01-decisions.md` 的 ADR-005 追加"部分取代"说明。
 - **禁止**：不要同时改动目录结构与字段名。这是纯实现替换。
 
 ### P2-02 SQLite 索引 + FTS5 trigram
@@ -157,8 +177,36 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 | # | 债务 | 影响 | 计划 |
 |---|---|---|---|
-| 1 | 自研 frontmatter 不支持嵌套 / 多行 | `.md` 不能被 Obsidian 正确解析 | P2-01 |
+| 1 | 自研 frontmatter 不支持嵌套 / 多行 | 用户手改一次（Obsidian 块列表）该条就读不出来；现在会显式报错，但仍然读不出 | **P2-01，最高优先** |
 | 2 | `doctor` 输出含绝对路径 | 公开仓里贴日志会泄露用户名 | 待定，见 `HANDOFF.md` |
 | 3 | 锁为自制 O_EXCL + 超时清陈旧 | 高并发下有竞态，但单用户场景够用 | 阶段 5 评估 |
 | 4 | 无 `backup` 命令，Git 需手工 | 备份靠人记得 | P5-04 |
-| 5 | 声明 `>=3.11` 但只在 3.13 验证 | 3.11 上 f-string / tomllib 行为未测 | 加 CI 多版本矩阵 |
+| 5 | 声明 `>=3.11` 但只在 3.12/3.13 验证 | 3.11 上 `tomllib` / `datetime.fromisoformat` 行为未测 | 加 CI 多版本矩阵 |
+| 6 | `config.save()` 整份重写 | 阶段 3 加 `ai.*` 后，`init` 会抹掉它们 | 阶段 3 前改成合并写入 |
+| 7 | `supersedes` 不做存在性校验，可悬空 | 取代链是核心资产却无完整性检查 | 阶段 3 |
+| 8 | `status` 与文件位置是两个真相源 | 手改 `status` 不移动文件，出现"躺在 inbox 里的 approved" | 阶段 4 |
+
+（已清：`doctor` 对条目做两次遍历 —— 现在统一走 `store.scan()`。）
+
+---
+
+## 建议调整（需所有者拍板，未生效）
+
+评审认为当前编号顺序是"技术债优先"而非"闭环优先"，建议调整为：
+
+```
+P2-01 (PyYAML)
+  → P2-03 (Adapter 接口) → P2-04 (Codex 单源)   ← 先打通导入→pending→approve
+  → P2-05 (Claude) → P2-02 (SQLite/FTS5)        ← 索引等有真实数据量再做
+  → P2-06/07 (监控 + 校准)
+  → 提前插入 P5-01 的只读三件套 (search/get/list)  ← 让别的 AI 真的能读到中央库
+```
+
+三条理由：
+
+1. P2-02 的价值取决于数据量，而没有 adapter 时数据量恒为 0；实测 400 条检索 114ms，撑到阶段 3 没问题。
+2. 策划书 §12.3 自己写的"首个可演示闭环"是「导入→提案→批准→写入→导出→commit」，当前排序把技术债排在最前。
+3. **P5-03（敏感检测）建议前移到 P3-01 之前**：ADR-003 的 `blocked` 完全依赖自报 `sensitivity`，阶段 3 一开 `auto` 自动入库，密钥可能先进 `vault/`，而检测排在阶段 5 —— 顺序是倒的。
+
+另建议增加一类"使用型工单"（如：接入第一个真实来源后连续自用 7 天并记录审核次数）。
+现在 30 个工单全是功能型，而 `docs/00-positioning.md` 的成功判据是"连续使用 30 天且停用会不便"，**没有任何工单服务这个判据**。

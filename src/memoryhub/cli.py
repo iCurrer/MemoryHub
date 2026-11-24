@@ -7,11 +7,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import __version__, config
+from .frontmatter import FrontmatterError
 from .models import CATEGORIES, STATUSES, MemoryEntry, ValidationError, now_iso
-from .storage.markdown_store import VaultStore
+from .storage.markdown_store import LockTimeout, VaultStore
 
 MIN_PYTHON = (3, 11)
 
@@ -32,12 +33,24 @@ def _print_entry_line(entry: MemoryEntry) -> None:
     )
 
 
+def _unreadable_hint(errors: List[Tuple[Path, str]]) -> None:
+    """One stderr line per command: unreadable files must never be silent."""
+    if not errors:
+        return
+    print(
+        f"warning: {len(errors)} file(s) could not be read and were skipped; "
+        "run `memoryhub doctor` for details",
+        file=sys.stderr,
+    )
+
+
 # ---------------------------------------------------------------- commands
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    if args.vault:
-        vault = Path(args.vault).expanduser().resolve()
+    vault_arg = getattr(args, "vault", None)
+    if vault_arg:
+        vault = Path(vault_arg).expanduser().resolve()
     else:
         vault = config.resolve_vault()
     store = VaultStore(vault)
@@ -74,77 +87,89 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    checks: List[tuple[str, bool, str]] = []
+    """Report problems in three levels.
+
+    ``FAIL`` blocks the phase gate; ``WARN`` is a state the user can legitimately
+    be in (no config yet, vault not under git). Phase 1 treated both as FAIL,
+    which made the documented acceptance command impossible to pass on a fresh
+    clone.
+    """
+    checks: List[Tuple[str, str, str]] = []
+
+    def add(name: str, level: str, detail: str) -> None:
+        checks.append((name, level, detail))
 
     version = sys.version_info
-    checks.append(
-        (
-            "python",
-            version[:2] >= MIN_PYTHON,
-            f"{version.major}.{version.minor}.{version.micro} "
-            f"(requires >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]})",
-        )
+    python_ok = version[:2] >= MIN_PYTHON
+    add(
+        "python",
+        "OK" if python_ok else "FAIL",
+        f"{version.major}.{version.minor}.{version.micro} "
+        f"(requires >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]})",
     )
 
     cfg = config.config_path()
-    checks.append(("config file", cfg.is_file(), str(cfg)))
+    add(
+        "config file",
+        "OK" if cfg.is_file() else "WARN",
+        str(cfg) if cfg.is_file() else f"{cfg} (absent; run `memoryhub init`)",
+    )
 
     vault = config.resolve_vault(getattr(args, "vault", None))
-    checks.append(("vault root", vault.is_dir(), str(vault)))
+    add("vault root", "OK" if vault.is_dir() else "FAIL", str(vault))
 
-    store = VaultStore(vault)
     missing = [rel for rel in config.LAYOUT if not (vault / rel).is_dir()]
-    checks.append(
-        (
-            "layout",
-            not missing,
-            "complete" if not missing else "missing: " + ", ".join(missing),
-        )
+    add(
+        "layout",
+        "OK" if not missing else "FAIL",
+        "complete" if not missing else "missing: " + ", ".join(missing),
     )
 
     git = shutil.which("git")
     has_repo = (vault / ".git").exists()
-    checks.append(
-        (
-            "git",
-            git is not None and has_repo,
-            "ok" if git and has_repo else ("git missing" if not git else "vault is not a repo"),
-        )
-    )
+    if git is None:
+        git_level, git_detail = "WARN", "git not on PATH; versioned backup unavailable"
+    elif not has_repo:
+        git_level, git_detail = "WARN", "vault is not a git repo; run `git init` for backup"
+    else:
+        git_level, git_detail = "OK", "ok"
+    add("git", git_level, git_detail)
 
-    malformed = 0
-    total = 0
-    for _ in store.iter_entries():
-        total += 1
-    for path in store.entry_paths():
-        try:
-            store.load(path)
-        except Exception:  # noqa: BLE001 - doctor must never crash
-            malformed += 1
-    checks.append(("entries", malformed == 0, f"{total} parsed, {malformed} malformed"))
+    store = VaultStore(vault)
+    entries, unreadable = store.scan()
+    add(
+        "entries",
+        "FAIL" if unreadable else "OK",
+        f"{len(entries)} parsed, {len(unreadable)} unreadable",
+    )
+    for path, message in unreadable:
+        print(f"  unreadable {path}: {message}", file=sys.stderr)
 
     sync_hits = [part for part in vault.parts if part.lower().startswith("onedrive")]
-    checks.append(
-        (
-            "cloud sync",
-            not sync_hits,
-            "vault is outside OneDrive" if not sync_hits else f"vault is under {sync_hits[0]}",
-        )
+    add(
+        "cloud sync",
+        "WARN" if sync_hits else "OK",
+        "vault is outside OneDrive" if not sync_hits else f"vault is under {sync_hits[0]}",
     )
 
     width = max(len(name) for name, _, _ in checks)
     failed = 0
-    for name, ok, detail in checks:
-        flag = "OK  " if ok else "FAIL"
-        if not ok:
+    warned = 0
+    for name, level, detail in checks:
+        if level == "FAIL":
             failed += 1
-        print(f"[{flag}] {name:<{width}}  {detail}")
+        elif level == "WARN":
+            warned += 1
+        print(f"[{level:<4}] {name:<{width}}  {detail}")
 
     print()
     if failed:
-        print(f"{failed} check(s) failed")
+        print(f"{failed} check(s) failed, {warned} warning(s)")
         return 1
-    print("all checks passed")
+    if warned:
+        print(f"all checks passed ({warned} warning(s))")
+    else:
+        print("all checks passed")
     return 0
 
 
@@ -169,10 +194,17 @@ def cmd_new(args: argparse.Namespace) -> int:
         if entry.trust == "blocked":
             print("error: entry is blocked by policy and cannot be approved", file=sys.stderr)
             return 1
+        if entry.trust == "review" and not args.force:
+            print(
+                f"error: {entry.category} entries require review (ADR-003); "
+                "run `memoryhub approve` after reading them, or pass --force",
+                file=sys.stderr,
+            )
+            return 1
         entry.status = "approved"
 
     store = _store(args)
-    path = store.save(entry)
+    path = store.create(entry)
     print(f"{entry.id}  status={entry.status} trust={entry.trust}")
     print(f"  {path}")
     return 0
@@ -180,21 +212,30 @@ def cmd_new(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     store = _store(args)
+    entries, errors = store.scan()
     shown = 0
-    for entry in store.iter_entries():
+    for entry in entries:
         if args.status and entry.status != args.status:
             continue
         if args.category and entry.category != args.category:
             continue
+        # An explicit --status is a history query, so expiry does not apply.
+        if not args.include_expired and not args.status and entry.is_expired():
+            continue
         _print_entry_line(entry)
         shown += 1
+    _unreadable_hint(errors)
     print(f"\n{shown} entries")
     return 0
 
 
 def cmd_show(args: argparse.Namespace) -> int:
     store = _store(args)
-    entry = store.get(args.id)
+    try:
+        entry = store.get(args.id)
+    except (ValidationError, FrontmatterError) as exc:
+        print(f"error: {args.id} cannot be read: {exc}", file=sys.stderr)
+        return 1
     if entry is None:
         print(f"error: no such memory: {args.id}", file=sys.stderr)
         return 1
@@ -204,7 +245,7 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     store = _store(args)
-    hits = store.search(args.query)
+    hits = store.search(args.query, include_expired=args.include_expired)
     for entry in hits:
         _print_entry_line(entry)
     print(f"\n{len(hits)} matches for {args.query!r}")
@@ -234,32 +275,53 @@ def cmd_stats(args: argparse.Namespace) -> int:
         print(f"  {status:<10} {count}")
     for category, count in sorted(stats["by_category"].items()):
         print(f"  {category:<10} {count}")
+    if stats["unreadable"]:
+        print(f"  unreadable {stats['unreadable']}", file=sys.stderr)
     return 0
 
 
 # ------------------------------------------------------------------- parser
 
 
+def _vault_parent() -> argparse.ArgumentParser:
+    """``--vault`` accepted both before and after the subcommand.
+
+    The subparser copy uses ``SUPPRESS`` so that an omitted value does not
+    overwrite one already parsed at the top level; without this,
+    ``memoryhub --vault X init`` silently fell back to the default vault.
+    """
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument(
+        "--vault",
+        metavar="PATH",
+        default=argparse.SUPPRESS,
+        help="override the vault location for this call",
+    )
+    return parent
+
+
 def build_parser() -> argparse.ArgumentParser:
+    vault_arg = _vault_parent()
     parser = argparse.ArgumentParser(
         prog="memoryhub",
+        parents=[vault_arg],
         description="Cross-AI personal memory governance layer (local-first).",
     )
     parser.add_argument("--version", action="version", version=f"memoryhub {__version__}")
-    parser.add_argument(
-        "--vault", metavar="PATH", help="override the vault location for this call"
-    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init", help="create the vault layout and write config")
-    p_init.add_argument("--vault", metavar="PATH", default=None, help="vault location")
+    p_init = sub.add_parser(
+        "init", parents=[vault_arg], help="create the vault layout and write config"
+    )
     p_init.add_argument("--no-git", action="store_true", help="do not run git init")
     p_init.set_defaults(func=cmd_init)
 
-    p_doctor = sub.add_parser("doctor", help="run environment and consistency checks")
+    p_doctor = sub.add_parser(
+        "doctor", parents=[vault_arg], help="run environment and consistency checks"
+    )
     p_doctor.set_defaults(func=cmd_doctor)
 
-    p_new = sub.add_parser("new", help="create a memory proposal")
+    p_new = sub.add_parser("new", parents=[vault_arg], help="create a memory proposal")
     p_new.add_argument("--category", required=True, choices=CATEGORIES)
     p_new.add_argument("--body", default="", help="memory text")
     p_new.add_argument("--file", default=None, help="read memory text from a file")
@@ -278,30 +340,55 @@ def build_parser() -> argparse.ArgumentParser:
     p_new.add_argument(
         "--approve", action="store_true", help="write directly as approved (refused if blocked)"
     )
+    p_new.add_argument(
+        "--force",
+        action="store_true",
+        help="with --approve: also bypass the review tier (ADR-003 escape hatch)",
+    )
     p_new.set_defaults(func=cmd_new)
 
-    p_list = sub.add_parser("list", help="list memories")
+    p_list = sub.add_parser("list", parents=[vault_arg], help="list memories")
     p_list.add_argument("--status", choices=STATUSES, default=None)
     p_list.add_argument("--category", choices=CATEGORIES, default=None)
+    p_list.add_argument(
+        "--include-expired",
+        action="store_true",
+        help="also show entries whose valid_until has passed",
+    )
     p_list.set_defaults(func=cmd_list)
 
-    p_show = sub.add_parser("show", help="print one memory as markdown")
+    p_show = sub.add_parser(
+        "show", parents=[vault_arg], help="print one memory as markdown"
+    )
     p_show.add_argument("id")
     p_show.set_defaults(func=cmd_show)
 
-    p_search = sub.add_parser("search", help="substring search over body and tags")
+    p_search = sub.add_parser(
+        "search", parents=[vault_arg], help="substring search over body and tags"
+    )
     p_search.add_argument("query")
+    p_search.add_argument(
+        "--include-expired",
+        action="store_true",
+        help="also match entries whose valid_until has passed",
+    )
     p_search.set_defaults(func=cmd_search)
 
-    p_ok = sub.add_parser("approve", help="approve a pending proposal")
+    p_ok = sub.add_parser(
+        "approve", parents=[vault_arg], help="approve a pending proposal"
+    )
     p_ok.add_argument("id")
     p_ok.set_defaults(func=lambda a: cmd_set_status(a, "approved"))
 
-    p_no = sub.add_parser("reject", help="reject a pending proposal")
+    p_no = sub.add_parser(
+        "reject", parents=[vault_arg], help="reject a pending proposal"
+    )
     p_no.add_argument("id")
     p_no.set_defaults(func=lambda a: cmd_set_status(a, "rejected"))
 
-    p_stats = sub.add_parser("stats", help="show vault statistics")
+    p_stats = sub.add_parser(
+        "stats", parents=[vault_arg], help="show vault statistics"
+    )
     p_stats.set_defaults(func=cmd_stats)
 
     return parser
@@ -312,7 +399,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except ValidationError as exc:
+    except (ValidationError, FrontmatterError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except LockTimeout as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print("hint: another memoryhub process is writing; retry in a moment", file=sys.stderr)
+        return 1
+    except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

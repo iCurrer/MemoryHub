@@ -155,3 +155,54 @@
 **代价**：无。
 
 **复审时点**：不复审。
+
+---
+
+## ADR-009 阶段 1.5 加固：写不丢、读不藏、门禁可判定
+
+**状态**：已采纳（2026-11-24）
+
+**背景**：阶段 1 骨架通过评审后发现三处会在**正常使用路径**上丢数据或失联，且验收门禁本身自相矛盾：
+
+1. `new_id()` 用「秒级时间戳 + 4 位 hex」＝ 65536 种后缀。实测同一秒内生成 2000 个 id 出现 32 个重复；`save()` 直接原子覆盖，重复 id 会**静默覆盖**前一条。批量导入（阶段 2 适配器的 `read() -> list[MemoryEntry]`）正是这个模式。
+2. frontmatter 解析失败时 `iter_entries()` 只往 stderr 打一行警告就跳过该条；用户在 Obsidian 里把 `tags: []` 改成块列表 `tags:\n  - dev`，这条记忆就会从 `list`/`search` 里**无声消失**，`show` 还会抛 traceback。这与「Markdown 人类可读、可手改」的定位直接冲突。
+3. `doctor` 把「config 未生成」「vault 未 git init」也算 FAIL，而 `init --no-git` 是文档化选项 —— 四处文档写的「必须无 FAIL」在合法路径上不可达。
+
+**决策**：
+
+| 编号 | 决策 | 落点 |
+|---|---|---|
+| 1 | id 后缀扩到 8 位 hex，且新增 `VaultStore.create()`：id 已被占用则抛 `IdCollisionError`，绝不覆盖 | `models.py::new_id`、`markdown_store.py::create` |
+| 2 | `save()` 保留 upsert 语义（状态流转需要覆盖同一 id），但加一层 `_refuse_foreign_owner` 兜底：同一 id 的 `created_at` 不同即判定为他人条目，拒绝写入 | `markdown_store.py::save` |
+| 3 | 读失败一律显式上报：`scan()` 返回 `(entries, errors)`，`list`/`search` 打一行汇总警告，`stats` 输出 `unreadable`，`doctor` 判 FAIL | `markdown_store.scan`、`cli.py` |
+| 4 | `doctor` 分三级：`FAIL` 阻断门禁（Python 版本、vault 缺失、layout 缺失、条目不可读）/ `WARN` 不阻断（config 未生成、git 未初始化、vault 位于 OneDrive） | `cli.py::cmd_doctor` |
+| 5 | 补齐 ADR-003 明文规定但未实现的规则：`confidence == low` 归入 `review` | `models.py::infer_trust` |
+| 6 | 查询默认过滤 `valid_until` 已过期的条目（ADR-006 的「查询时必须过滤」），历史视图用 `--include-expired` 显式打开；显式 `--status` 视为历史查询，不再二次过滤 | `models.is_expired`、`cli.py` |
+| 7 | `--approve` 遇到 `trust=review` 必须拒绝，需显式 `--force` 才能越过；`blocked` 仍不可越过 | `cli.py::cmd_new` |
+| 8 | `--vault` 在子命令前后都接受，任一缺省不再覆盖已解析的值 | `cli.py::_vault_parent` |
+
+**理由**：这 8 条里没有一条是功能，全部是「让已有的承诺真的成立」。第 1、2 条防的是静默数据丢失 —— 一次丢数据就够让用户不再信任这个库；第 3、4 条防的是「工具说没事，实际有事」，它比报错危险得多；第 5、7 条是把 ADR-003 从文档变成代码，否则「分级信任」这个核心差异点在任何一次 `--approve` 面前都不存在。
+
+**代价**：
+
+- id 变长一点，旧 vault 的 4 位 id 继续可读（正则接受 4–32 位），但不会自动迁移。
+- `scan()` 会把整库读进内存，大于数万条时应换成流式统计（阶段 2 索引上线后此路径不再是主路径）。
+- 默认过滤过期条目改变了 `list`/`search` 的返回集，这是行为变更，需在 README 中写明。
+- `--approve` 变严格后，原有的批量脚本若依赖它直接入库会失败 —— 这是有意的。
+
+**复审时点**：阶段 2 采集适配器落地后复审第 1、2 条（批量导入是碰撞的唯一真实场景）。
+
+---
+
+## ADR-010 未决：`project` 分类的信任归属
+
+**状态**：待所有者拍板（2026-11-24 记录，未生效）
+
+**问题**：ADR-003 的信任表只覆盖了 `preference`/`knowledge`（→`auto`）与 `profile`/`decision`（→`review`），`CATEGORIES` 里的 **`project` 没有归属**。当前实现让它落 `auto`，等于由代码替所有者做了一个决策。
+
+**待定选项**：
+
+1. `project` → `review`：项目背景会改变 AI 的行为，与 `profile` 同级。
+2. `project` → `auto`：承认现状，但要在 ADR-003 里补上这一行。
+
+**在拍板之前**：代码保持 `auto`（不擅自改决定），`tests/test_store.py::test_decision_category_needs_review` 不动，本 ADR 记录该缺口。

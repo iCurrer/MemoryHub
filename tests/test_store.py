@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from memoryhub import frontmatter  # noqa: E402
 from memoryhub.models import MemoryEntry, ValidationError  # noqa: E402
-from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
+from memoryhub.storage.markdown_store import IdCollisionError, VaultStore  # noqa: E402
 
 
 class FrontmatterTests(unittest.TestCase):
@@ -40,6 +40,15 @@ class FrontmatterTests(unittest.TestCase):
     def test_unterminated_block_fails(self) -> None:
         with self.assertRaises(frontmatter.FrontmatterError):
             frontmatter.split("---\nid: x\nbody\n")
+
+    def test_utf8_bom_does_not_hide_the_frontmatter(self) -> None:
+        # Windows editors write a BOM; without stripping it the whole block
+        # used to be treated as body text and the entry vanished.
+        entry = MemoryEntry.create(category="knowledge", body="from notepad")
+        text = "\ufeff" + entry.to_markdown()
+        back = MemoryEntry.from_markdown(text)
+        self.assertEqual(back.id, entry.id)
+        self.assertEqual(back.body.strip(), "from notepad")
 
 
 class ModelTests(unittest.TestCase):
@@ -70,6 +79,44 @@ class ModelTests(unittest.TestCase):
         text = entry.to_markdown().replace("id: ", "future_field: 42\nid: ", 1)
         back = MemoryEntry.from_markdown(text)
         self.assertEqual(back.extra.get("future_field"), 42)
+
+    def test_ids_are_unique_under_bulk_creation(self) -> None:
+        # 4 hex chars produced ~32 duplicates per 2000 ids; 8 must not.
+        ids = {MemoryEntry.new_id() for _ in range(5000)}
+        self.assertEqual(len(ids), 5000)
+
+    def test_legacy_short_id_still_parses(self) -> None:
+        entry = MemoryEntry.create(category="knowledge", body="legacy")
+        text = entry.to_markdown().replace(entry.id, "mem_20261124T135122_a1b2")
+        back = MemoryEntry.from_markdown(text)
+        self.assertEqual(back.id, "mem_20261124T135122_a1b2")
+
+    def test_tags_and_supersedes_must_be_string_lists(self) -> None:
+        entry = MemoryEntry.create(category="knowledge", body="x")
+        entry.tags = "not-a-list"
+        with self.assertRaises(ValidationError):
+            entry.validate()
+        entry.tags = [1]
+        with self.assertRaises(ValidationError):
+            entry.validate()
+        entry.tags = []
+        entry.supersedes = "mem_20261124T135122_a1b2"
+        with self.assertRaises(ValidationError):
+            entry.validate()
+
+    def test_low_confidence_requires_review(self) -> None:
+        low = MemoryEntry.create(category="knowledge", body="x", confidence="low")
+        high = MemoryEntry.create(category="knowledge", body="x", confidence="high")
+        self.assertEqual(low.trust, "review")
+        self.assertEqual(high.trust, "auto")
+
+    def test_is_expired(self) -> None:
+        entry = MemoryEntry.create(category="knowledge", body="x")
+        self.assertFalse(entry.is_expired())
+        entry.valid_until = "2020-01-01T00:00:00+08:00"
+        self.assertTrue(entry.is_expired())
+        entry.valid_until = "2999-01-01T00:00:00+08:00"
+        self.assertFalse(entry.is_expired())
 
 
 class StoreTests(unittest.TestCase):
@@ -145,6 +192,68 @@ class StoreTests(unittest.TestCase):
         stats = self.store.stats()
         self.assertEqual(stats["total"], 2)
         self.assertEqual(stats["by_status"].get("pending"), 2)
+        self.assertEqual(stats["unreadable"], 0)
+
+    def test_create_refuses_duplicate_id(self) -> None:
+        first = MemoryEntry.create(category="knowledge", body="first")
+        self.store.create(first)
+        second = MemoryEntry.create(category="knowledge", body="second")
+        second.id = first.id
+        with self.assertRaises(IdCollisionError):
+            self.store.create(second)
+        self.assertEqual(self.store.get(first.id).body.strip(), "first")
+
+    def test_save_refuses_to_clobber_a_different_entry(self) -> None:
+        first = MemoryEntry.create(category="knowledge", body="first")
+        self.store.create(first)
+        intruder = MemoryEntry.create(category="knowledge", body="intruder")
+        intruder.id = first.id
+        intruder.created_at = "2020-01-01T00:00:00+08:00"
+        intruder.valid_from = "2020-01-01T00:00:00+08:00"
+        with self.assertRaises(IdCollisionError):
+            self.store.save(intruder)
+        self.assertEqual(self.store.get(first.id).body.strip(), "first")
+
+    def test_scan_surfaces_unreadable_files(self) -> None:
+        entry = MemoryEntry.create(category="preference", body="prefers python")
+        path = self.store.save(entry)
+        # What Obsidian itself writes when the user adds a tag.
+        path.write_text(
+            path.read_text(encoding="utf-8").replace("tags: []", "tags:\n  - dev"),
+            encoding="utf-8",
+        )
+        entries, errors = self.store.scan()
+        self.assertEqual(entries, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("unsupported frontmatter line", errors[0][1])
+        self.assertEqual(self.store.stats()["unreadable"], 1)
+
+    def test_scan_keeps_readable_entries_next_to_broken_ones(self) -> None:
+        good = MemoryEntry.create(category="knowledge", body="good")
+        bad = MemoryEntry.create(category="knowledge", body="bad")
+        self.store.save(good)
+        bad_path = self.store.save(bad)
+        bad_path.write_text(
+            bad_path.read_text(encoding="utf-8").replace(
+                "category: knowledge", "category: nonsense"
+            ),
+            encoding="utf-8",
+        )
+        entries, errors = self.store.scan()
+        self.assertEqual([e.id for e in entries], [good.id])
+        self.assertEqual(len(errors), 1)
+
+    def test_search_hides_expired_entries(self) -> None:
+        old = MemoryEntry.create(category="preference", body="prefers rust")
+        self.store.save(old)
+        self.store.set_status(old.id, "approved")
+        self.store.stamp_validity(
+            old.id,
+            superseded_by=MemoryEntry.new_id(),
+            valid_until="2020-01-01T00:00:00+08:00",
+        )
+        self.assertEqual(self.store.search("rust"), [])
+        self.assertEqual(len(self.store.search("rust", include_expired=True)), 1)
 
 
 if __name__ == "__main__":
