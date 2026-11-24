@@ -134,7 +134,7 @@ class CliTests(unittest.TestCase):
         entry_id = out.split()[0]
         entry_path = next(self.vault.rglob("*.md"))
         entry_path.write_text(
-            entry_path.read_text(encoding="utf-8").replace("tags: []", "tags:\n  - dev"),
+            entry_path.read_text(encoding="utf-8").replace("tags: []", "tags: [unclosed"),
             encoding="utf-8",
         )
         code, _out, err = self.run_cli("show", entry_id)

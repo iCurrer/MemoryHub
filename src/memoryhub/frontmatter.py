@@ -1,93 +1,78 @@
-"""Minimal, dependency-free frontmatter reader/writer.
+"""YAML frontmatter reader/writer.
 
-Phase 1 deliberately supports a restricted subset of YAML:
+Phase 1 shipped a hand-rolled parser that understood only flat ``key: value``
+pairs and inline lists. That was enough to prove the data model, but it made the
+vault fragile in exactly the way the product cannot afford: an entry edited in
+Obsidian (which writes block lists) became unreadable. Phase 2 replaces the
+implementation with PyYAML while keeping the same ``split`` / ``join`` contract.
 
-- flat ``key: value`` pairs only (no nesting, no multiline strings)
-- scalars: str / int / float / bool / null
-- inline lists: ``[a, b, "c d"]``
+Deliberate deviations from plain ``yaml.safe_load``:
 
-This keeps the storage layer zero-dependency and therefore testable on a clean
-machine. Phase 2 migrates to a real YAML library (see docs/01-decisions.md
-ADR-005) together with Obsidian interoperability tests.
+- YAML 1.1 treats ``on`` / ``off`` / ``yes`` / ``no`` as booleans. A tag named
+  ``on`` would come back as ``True`` and fail validation, so the loader uses
+  YAML 1.2 semantics: only ``true`` / ``false`` are booleans.
+- YAML turns ISO timestamps into ``date`` objects and the schema stores them as
+  strings, so every ``date`` / ``datetime`` is normalised back to ISO 8601.
+- Duplicate keys are rejected instead of silently keeping the last one.
+
+Phase 1 called this module's parser "temporary" (ADR-005). The migration is
+recorded in ADR-005 as a partial supersession.
 """
 
 from __future__ import annotations
 
 import re
+from datetime import date, datetime
 from typing import Any, Dict, Tuple
 
+import yaml
+
 DELIM = "---"
-_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$")
+
+#: Match the ``---`` fence on its own line, tolerating surrounding whitespace.
+_BOOL_RE = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
 
 
 class FrontmatterError(ValueError):
-    """Raised when a frontmatter block cannot be parsed."""
+    """Raised when a frontmatter block cannot be parsed or serialised."""
 
 
-def _split_inline(inner: str) -> list[str]:
-    parts: list[str] = []
-    buf: list[str] = []
-    quote = ""
-    for ch in inner:
-        if quote:
-            buf.append(ch)
-            if ch == quote:
-                quote = ""
-        elif ch in "\"'":
-            quote = ch
-            buf.append(ch)
-        elif ch == ",":
-            parts.append("".join(buf))
-            buf = []
-        else:
-            buf.append(ch)
-    if buf:
-        parts.append("".join(buf))
-    return [p.strip() for p in parts if p.strip()]
+class _Loader(yaml.SafeLoader):
+    """SafeLoader with duplicate-key detection and YAML 1.2 bool rules."""
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> Dict[Any, Any]:
+        seen: set[Any] = set()
+        for key_node, _value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise FrontmatterError(f"duplicate frontmatter key: {key!r}")
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
 
 
-def parse_scalar(raw: str) -> Any:
-    s = raw.strip()
-    if s == "" or s in ("null", "~", "None"):
-        return None
-    if s in ("true", "True"):
-        return True
-    if s in ("false", "False"):
-        return False
-    if s.startswith("[") and s.endswith("]"):
-        inner = s[1:-1].strip()
-        return [] if not inner else [parse_scalar(p) for p in _split_inline(inner)]
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
-        return s[1:-1]
-    try:
-        return int(s)
-    except ValueError:
-        pass
-    try:
-        return float(s)
-    except ValueError:
-        pass
-    return s
+#: Rebuild the resolver table without the YAML 1.1 bool words, then add back the
+#: ``true`` / ``false`` only resolver. Done on a subclass so ``SafeLoader`` itself
+#: is untouched.
+_Loader.yaml_implicit_resolvers = {
+    first: [(tag, regexp) for tag, regexp in mappings if tag != "tag:yaml.org,2002:bool"]
+    for first, mappings in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_Loader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    _BOOL_RE,
+    list("tTfF"),
+)
 
 
-def dump_scalar(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
+def _normalise(value: Any) -> Any:
+    """Coerce YAML-native scalars back into the shapes the schema expects."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _normalise(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return "[" + ", ".join(dump_scalar(v) for v in value) + "]"
-    text = str(value)
-    needs_quote = (
-        text == ""
-        or text != text.strip()
-        or any(c in text for c in ':#[]{}"\'')
-    )
-    if needs_quote:
-        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return text
+        return [_normalise(item) for item in value]
+    return value
 
 
 def split(text: str) -> Tuple[Dict[str, Any], str]:
@@ -111,26 +96,43 @@ def split(text: str) -> Tuple[Dict[str, Any], str]:
     if end is None:
         raise FrontmatterError("frontmatter block is not terminated by '---'")
 
-    meta: Dict[str, Any] = {}
-    for line in lines[1:end]:
-        raw = line.rstrip("\r\n")
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        match = _KEY_RE.match(raw)
-        if not match:
-            raise FrontmatterError(
-                f"unsupported frontmatter line (only flat 'key: value' is allowed): {raw!r}"
-            )
-        meta[match.group(1)] = parse_scalar(match.group(2))
+    block = "".join(lines[1:end])
     body = "".join(lines[end + 1 :])
-    return meta, body
+    if not block.strip():
+        return {}, body
+
+    try:
+        data = yaml.load(block, Loader=_Loader)
+    except FrontmatterError:
+        raise
+    except yaml.YAMLError as exc:
+        raise FrontmatterError(f"invalid YAML frontmatter: {exc}") from exc
+
+    if data is None:
+        return {}, body
+    if not isinstance(data, dict):
+        raise FrontmatterError(
+            f"frontmatter must be a mapping, got {type(data).__name__}"
+        )
+    return {str(key): _normalise(value) for key, value in data.items()}, body
 
 
 def join(meta: Dict[str, Any], body: str) -> str:
     """Render metadata + body back into a frontmatter document."""
-    lines = [DELIM]
-    for key, value in meta.items():
-        lines.append(f"{key}: {dump_scalar(value)}")
-    lines.append(DELIM)
-    head = "\n".join(lines) + "\n"
-    return head + body
+    if not isinstance(meta, dict):
+        raise FrontmatterError(
+            f"frontmatter must be a dict, got {type(meta).__name__}"
+        )
+    try:
+        block = yaml.safe_dump(
+            meta,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+            width=4096,
+        )
+    except yaml.YAMLError as exc:
+        raise FrontmatterError(f"cannot serialise frontmatter: {exc}") from exc
+    if not block.strip():
+        block = "{}\n"
+    return f"{DELIM}\n{block}{DELIM}\n{body}"

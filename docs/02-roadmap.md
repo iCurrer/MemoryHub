@@ -52,18 +52,20 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 ## 阶段 2 · 采集（当前阶段）
 
-### P2-01 迁移 frontmatter 到 PyYAML
+### P2-01 迁移 frontmatter 到 PyYAML ✅
 
 - **目标**：支持完整 YAML，保证 `.md` 可被 Obsidian 正确解析。
 - **落位**：`src/memoryhub/frontmatter.py`（保留同名函数签名 `split` / `join`，内部换实现）
-- **依赖**：无。本工单同时引入项目第一个运行时依赖，需在 `pyproject.toml` 声明 `pyyaml`。
-- **完成判据**：
-  1. 现有 38 个测试全绿，且 `test_rejects_nested_yaml` 改为断言"嵌套 YAML 可正常解析"。
+- **依赖**：无。本工单同时引入项目第一个运行时依赖，已在 `pyproject.toml` 声明 `pyyaml>=6.0`。
+- **完成判据**（全部达成）：
+  1. 现有测试全绿，`test_rejects_nested_yaml` → `test_nested_yaml_is_parsed`，断言嵌套 YAML 可正常解析。
   2. 新增测试：写出的 `.md` 用 PyYAML 独立 `safe_load` 能解析通过。
   3. 新增测试：含多行字符串、嵌套 `source:` 列表的 frontmatter 可往返。
-  4. 新增测试：Obsidian 写出的块列表（`tags:\n  - dev`）与 BOM 前缀文件都能读出。
-  5. `docs/01-decisions.md` 的 ADR-005 追加"部分取代"说明。
+  4. 新增测试：Obsidian 块列表可读出；BOM 前缀文件可读出。
+  5. `docs/01-decisions.md` 的 ADR-005 已追加"部分取代"说明。
 - **禁止**：不要同时改动目录结构与字段名。这是纯实现替换。
+- **实际结果**：38 → 45 个测试。三个额外处理记在 ADR-005：YAML 1.2 布尔规则、时间戳还原为字符串、重复键报错。
+- **遗留**：`AGENTS.md` 的"测试可在无第三方包的机器上跑通"对阶段 2 不再成立，待所有者修订措辞。
 
 ### P2-02 SQLite 索引 + FTS5 trigram
 
@@ -199,7 +201,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 | # | 债务 | 影响 | 计划 |
 |---|---|---|---|
-| 1 | 自研 frontmatter 不支持嵌套 / 多行 | 用户手改一次（Obsidian 块列表）该条就读不出来；现在会显式报错，但仍然读不出 | **P2-01，最高优先** |
+| 1 | ~~自研 frontmatter 不支持嵌套 / 多行~~ **已清（P2-01）** | 用户手改（Obsidian 块列表）导致该条读不出来 | 完成，见 ADR-005 部分取代 |
 | 2 | `doctor` 输出含绝对路径 | 公开仓里贴日志会泄露用户名 | 待定，见 `HANDOFF.md` |
 | 3 | 锁为自制 O_EXCL + 超时清陈旧 | 高并发下有竞态，但单用户场景够用 | 阶段 5 评估 |
 | 4 | 无 `backup` 命令，Git 需手工 | 备份靠人记得 | P5-04 |

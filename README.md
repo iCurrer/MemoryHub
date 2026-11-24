@@ -38,22 +38,22 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 ## 当前已实现
 
 - `MemoryEntry` 领域模型：分类、状态、信任级、敏感级、来源、时效字段
-- 零依赖 frontmatter 读写（受限 YAML 子集，含 UTF-8 BOM 剥离）
+- 完整 YAML frontmatter 读写（PyYAML）：嵌套、多行、Obsidian 块列表、UTF-8 BOM 都能往返
 - 原子写入 + 跨进程文件锁；一个 id 只对应一个文件；**id 复用会被拒绝而不是覆盖**
 - `inbox`（待审）与 `vault`（正式）之间的流转，不留重复文件
 - 三级信任策略：`auto` / `review` / `blocked`；`review` 级别直接批准需显式 `--force`，敏感条目禁止批准
 - 时效裁决：`valid_until` 已过期的条目默认不出现在 `list` / `search` 里（`--include-expired` 打开）
 - 读不了的 `.md` 不会被静默跳过：`list` / `search` 告警，`stats` 计数，`doctor` 判 FAIL
 - CLI：`init` `doctor` `new` `list` `show` `search` `approve` `reject` `stats`
-- 38 个单元测试（含 15 个 CLI 端到端用例），全部通过
+- 45 个单元测试（含 15 个 CLI 端到端用例），全部通过
 
-> **已知限制**：frontmatter 解析器只认扁平 `key: value` 与内联列表。如果你在 Obsidian 里
-> 把 `tags: [dev]` 改成块列表 `tags:` 换行 `  - dev`，这条记忆就读不出来（会报错，不会静默丢失）。
-> 这是阶段 2 第一个工单 P2-01 要解决的问题。
+> **依赖**：只有 `pyyaml`。阶段 1 曾零依赖，P2-01 为支持完整 YAML 引入（理由见 ADR-005）。
 
 ## 快速开始
 
 ```bash
+pip install pyyaml    # 唯一的运行时依赖
+
 # 1. 创建记忆库（独立于本仓库，默认 D:/my-memory）
 PYTHONPATH=src python -m memoryhub init --vault D:/my-memory
 
@@ -105,7 +105,7 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 |---|---|---|
 | 1 | 记忆模型、存储层、原子写入、CLI、测试 | 骨架完成 |
 | 1.5 | 加固：id 碰撞、读不出即报错、门禁分级、过期过滤 | 完成（ADR-009） |
-| 2 | 采集适配器（Codex / Claude Code）、文件监控、哈希去重、SQLite FTS5 索引（trigram） | 未开始 |
+| 2 | 采集适配器（Codex / Claude Code / Trae / WorkBuddy）、文件监控、哈希去重、SQLite FTS5 索引（trigram） | **P2-01 完成**（真 YAML），其余未开始 |
 | 3 | AI 整理（仅产出提案）、冲突检测、Pydantic 校验 | 未开始 |
 | 4 | 审核流 + 差异预览（CLI） | 未开始 |
 | 5 | MCP stdio（只读 + propose）、Git 自动备份 | 未开始 |

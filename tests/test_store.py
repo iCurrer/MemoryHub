@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from memoryhub import frontmatter  # noqa: E402
@@ -32,10 +34,58 @@ class FrontmatterTests(unittest.TestCase):
         self.assertIsNone(back["valid_until"])
         self.assertEqual(body, "body line\n")
 
-    def test_rejects_nested_yaml(self) -> None:
-        text = "---\nid: x\nsource:\n  adapter: codex\n---\nbody\n"
+    def test_nested_yaml_is_parsed(self) -> None:
+        # Phase 1 rejected nested YAML; phase 2 (P2-01) must understand it,
+        # because the planning book's own schema uses a nested `source:` list.
+        text = "---\nid: x\nsource:\n  - adapter: codex\n    path: AGENTS.md\n---\nbody\n"
+        meta, body = frontmatter.split(text)
+        self.assertEqual(meta["source"], [{"adapter": "codex", "path": "AGENTS.md"}])
+        self.assertEqual(body, "body\n")
+
+    def test_obsidian_block_list_is_readable(self) -> None:
+        entry = MemoryEntry.create(category="preference", body="prefers python")
+        text = entry.to_markdown().replace("tags: []", "tags:\n  - dev\n  - python")
+        back = MemoryEntry.from_markdown(text)
+        self.assertEqual(back.tags, ["dev", "python"])
+
+    def test_multiline_and_nested_roundtrip(self) -> None:
+        meta = {
+            "id": "mem_20261124T000000_abcdef01",
+            "note": "line one\nline two",
+            "source": [{"adapter": "codex", "path": "AGENTS.md"}],
+        }
+        text = frontmatter.join(meta, "body\n")
+        back, body = frontmatter.split(text)
+        self.assertEqual(back, meta)
+        self.assertEqual(body, "body\n")
+
+    def test_dumped_markdown_is_valid_yaml(self) -> None:
+        entry = MemoryEntry.create(
+            category="knowledge", body="x", tags=["development", "a b", "123"]
+        )
+        block = entry.to_markdown().split("---\n")[1]
+        loaded = yaml.safe_load(block)  # independent of our loader
+        self.assertEqual(loaded["id"], entry.id)
+        self.assertEqual(loaded["tags"], ["development", "a b", "123"])
+
+    def test_timestamps_come_back_as_strings(self) -> None:
+        meta, _body = frontmatter.split("---\ncreated_at: 2026-11-24T13:51:22+08:00\n---\n")
+        self.assertIsInstance(meta["created_at"], str)
+        self.assertEqual(meta["created_at"], "2026-11-24T13:51:22+08:00")
+
+    def test_yaml11_bool_words_stay_strings(self) -> None:
+        # PyYAML's default resolver turns on/off/yes/no into booleans (YAML 1.1);
+        # a tag named `on` would then fail validation.
+        meta, _body = frontmatter.split("---\ntags: [on, yes, true, no]\n---\n")
+        self.assertEqual(meta["tags"], ["on", "yes", True, "no"])
+
+    def test_duplicate_key_is_rejected(self) -> None:
         with self.assertRaises(frontmatter.FrontmatterError):
-            frontmatter.split(text)
+            frontmatter.split("---\nid: one\nid: two\n---\n")
+
+    def test_non_mapping_frontmatter_is_rejected(self) -> None:
+        with self.assertRaises(frontmatter.FrontmatterError):
+            frontmatter.split("---\n- a\n- b\n---\n")
 
     def test_unterminated_block_fails(self) -> None:
         with self.assertRaises(frontmatter.FrontmatterError):
@@ -217,15 +267,15 @@ class StoreTests(unittest.TestCase):
     def test_scan_surfaces_unreadable_files(self) -> None:
         entry = MemoryEntry.create(category="preference", body="prefers python")
         path = self.store.save(entry)
-        # What Obsidian itself writes when the user adds a tag.
+        # Broken YAML: a human typo, not a format we should ever write.
         path.write_text(
-            path.read_text(encoding="utf-8").replace("tags: []", "tags:\n  - dev"),
+            path.read_text(encoding="utf-8").replace("tags: []", "tags: [unclosed"),
             encoding="utf-8",
         )
         entries, errors = self.store.scan()
         self.assertEqual(entries, [])
         self.assertEqual(len(errors), 1)
-        self.assertIn("unsupported frontmatter line", errors[0][1])
+        self.assertIn("invalid YAML", errors[0][1])
         self.assertEqual(self.store.stats()["unreadable"], 1)
 
     def test_scan_keeps_readable_entries_next_to_broken_ones(self) -> None:
