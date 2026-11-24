@@ -1,9 +1,10 @@
-﻿# MemoryHub
+# MemoryHub
 
 跨 AI 工具的个人记忆治理层。本地优先、可审计、可迁移。
 
-> **状态：阶段 1 骨架 + 阶段 1.5 加固，尚未发布。** 目前只有记忆模型、存储层、CLI
-> 基础命令和测试；采集适配器、AI 整理、审核界面、MCP 服务均未实现。请不要把它当作可用工具使用。
+> **状态：阶段 1 / 1.5 完成，阶段 2 的采集与监控已通，阶段 5 的只读 MCP 已通。尚未发布。**
+> 现在可以：从三个来源采记忆 → 人工审核 → 落 Markdown 库 → 通过 CLI 或 MCP 检索。
+> AI 整理（去重/冲突）、索引、审核界面、备份命令**都还没有**。请勿当作日常工具依赖。
 
 ---
 
@@ -29,7 +30,7 @@ MemoryHub 不替换任何工具的原生记忆，而是在它们之上加一层*
 
 MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体是三件事：
 
-- **来源留痕**：每条记忆能追到哪个工具、哪个文件、哪次哈希。
+- **来源留痕**：每条记忆能追到哪个工具、哪个文件、哪次哈希、在指令链的第几层。
 - **时效裁决**：`valid_from` / `valid_until` / `supersedes`，旧结论不删除而是封窗，可查"当时为什么这么定"。
 - **分级信任**：不是所有记忆都配得上人工逐条审核，但所有记忆都必须可回滚。
 
@@ -37,45 +38,86 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 ## 当前已实现
 
-- `MemoryEntry` 领域模型：分类、状态、信任级、敏感级、来源、时效字段
+**数据层**
+
+- `MemoryEntry` 领域模型：分类、状态、信任级、敏感级、来源、时效、`precedence` / `layer`
 - 完整 YAML frontmatter 读写（PyYAML）：嵌套、多行、Obsidian 块列表、UTF-8 BOM 都能往返
 - 原子写入 + 跨进程文件锁；一个 id 只对应一个文件；**id 复用会被拒绝而不是覆盖**
 - `inbox`（待审）与 `vault`（正式）之间的流转，不留重复文件
-- 三级信任策略：`auto` / `review` / `blocked`；`review` 级别直接批准需显式 `--force`，敏感条目禁止批准
+- 三级信任：`auto` / `review` / `blocked`；`review` 直接批准需显式 `--force`，敏感条目禁止批准
 - 时效裁决：`valid_until` 已过期的条目默认不出现在 `list` / `search` 里（`--include-expired` 打开）
 - 读不了的 `.md` 不会被静默跳过：`list` / `search` 告警，`stats` 计数，`doctor` 判 FAIL
-- **采集**：`scan` 从 WorkBuddy（`~/.workbuddy/memory/`）与 Claude Code（`CLAUDE.md` 链 + `projects/*/memory/`）读入待审条目，按内容指纹去重、可 `--dry-run`
-- **MCP 只读入口**：`memoryhub mcp` 起 stdio 服务，`memory_search` / `memory_get` / `memory_list` / `memory_propose`
-  四个工具，每条结果带来源与有效期；只暴露已批准且未过期的条目
-- CLI：`init` `doctor` `new` `scan` `mcp` `list` `show` `search` `approve` `reject` `stats`
-- 88 个单元测试（含 19 个 CLI 端到端 + 1 个真实 stdio 握手），全部通过
 
-> **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖，P2-01 / P5-01 为真 YAML 与 MCP 引入（代价见 ADR-005、ADR-012）。
+**采集（3 个适配器，全部只读）**
+
+| 适配器 | 读什么 |
+|---|---|
+| `workbuddy` | `~/.workbuddy/memory/*_memory.md`、`user-*-personal/{IDENTITY,SOUL,USER,MEMORY}.md` |
+| `claude` | `~/.claude/CLAUDE.md`（用户档案）、`./CLAUDE.md`、`./CLAUDE.local.md`、`.claude/rules/*.md` |
+| `codex` | `AGENTS.md` 指令链：全局 → 项目根 → cwd，`AGENTS.override.md` 遮蔽同目录 `AGENTS.md` |
+
+- `scan`：一次性采集，按内容指纹去重，`--dry-run` 可预览
+- `watch`：2 秒轮询 + 防抖 + 哈希，只导入真正变化的文件（`--once` 供 cron/测试）
+
+**MCP（4 个工具，stdio）**
+
+- `memory_search` / `memory_get` / `memory_list`：只返回**已批准且未过期**的条目，每条带来源与有效期
+- `memory_propose`：AI 客户端可以交提案，但**只能进待审队列**；命中密钥形状直接 `blocked`
+- 没有 `memory_write` —— 任何客户端都无法直接把内容写进正式库
+
+**其他**
+
+- CLI：`init` `doctor` `new` `scan` `watch` `mcp` `list` `show` `search` `approve` `reject` `stats`
+- 107 个单元测试（含 19 个 CLI 端到端、11 个 watcher、1 个真实 MCP stdio 握手），全部通过
+
+> **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 
 ## 快速开始
 
 ```bash
-pip install pyyaml    # 唯一的运行时依赖
+pip install pyyaml mcp
 
 # 1. 创建记忆库（独立于本仓库，默认 D:/my-memory）
 PYTHONPATH=src python -m memoryhub init --vault D:/my-memory
 
-# 2. 环境自检
+# 2. 环境自检（exit 0 才算通过；WARN 不算失败）
 PYTHONPATH=src python -m memoryhub doctor
 
-# 3. 写入一条提案（默认 pending，不会直接进正式库）
-PYTHONPATH=src python -m memoryhub new \
-  --category preference \
-  --body "用户开发项目时优先考虑 Python；除非有明确性能需求，否则不选 Rust。" \
-  --tag development --adapter codex --kind instruction
+# 3. 采集：从已装的 AI 工具读入待审条目
+PYTHONPATH=src python -m memoryhub scan --dry-run      # 先看会导入什么
+PYTHONPATH=src python -m memoryhub scan
 
 # 4. 审核
 PYTHONPATH=src python -m memoryhub list --status pending
-PYTHONPATH=src python -m memoryhub approve mem_xxxxxxxx_xxxx
+PYTHONPATH=src python -m memoryhub show <id>
+PYTHONPATH=src python -m memoryhub approve <id>
 
-# 5. 跑测试
+# 5. 检索
+PYTHONPATH=src python -m memoryhub search "pnpm"
+
+# 6. 让别的 AI 客户端来查（stdio，前台阻塞）
+PYTHONPATH=src python -m memoryhub mcp
+
+# 7. 跑测试
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
+
+接到 AI 客户端（Claude Desktop / Cursor 等）：
+
+```json
+{
+  "mcpServers": {
+    "memoryhub": {
+      "command": "python",
+      "args": ["-m", "memoryhub", "mcp", "--vault", "D:/my-memory"],
+      "env": { "PYTHONPATH": "D:/project/MemoryHub/src" }
+    }
+  }
+}
+```
+
+> 协议层已用真实 subprocess 跑过完整握手（`initialize` → `tools/list` → `tools/call`），
+> 但**未在具体客户端里实机接线**。连不上先看客户端日志。
 
 安装为命令（需要 hatchling）：
 
@@ -89,8 +131,11 @@ memoryhub doctor
 ```
 D:/project/MemoryHub        代码（本仓库，可开源）
   src/memoryhub/            实现
+    adapters/               外部来源适配器（只读）
+    watcher/                轮询 + 防抖 + 哈希
+    mcp/                    只读 MCP 服务端
   tests/                    单元测试
-  docs/                     定位、决策、路线、策划书
+  docs/                     定位、决策、路线、上游格式基线、策划书
   tools/                    一次性转换脚本
 D:/my-memory                你的记忆（独立私有仓，绝不进本仓库）
   vault/                    正式记忆，按分类分目录
@@ -98,7 +143,7 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
   inbox/rejected/           拒绝记录（保留，避免反复导入）
   inbox/conflicts/          冲突待裁决
   sources/                  原始来源快照
-  exports/                  对外导出的只读快照
+  exports/                  对外导出的只读快照（**当前无任何代码写入**，见 ADR-002）
   logs/                     运行日志
 ```
 
@@ -106,24 +151,26 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 1 | 记忆模型、存储层、原子写入、CLI、测试 | 骨架完成 |
+| 1 | 记忆模型、存储层、原子写入、CLI、测试 | 完成 |
 | 1.5 | 加固：id 碰撞、读不出即报错、门禁分级、过期过滤 | 完成（ADR-009） |
-| 2 | 采集适配器（WorkBuddy、Claude Code 已通；Codex / Trae 待做）、文件监控、哈希去重、SQLite FTS5 索引（trigram） | **P2-01 / P2-03 / P2-03a / P2-05 完成**，其余未开始 |
+| 2 | 采集适配器、文件监控、哈希去重 | **采集 + 监控完成**；SQLite FTS5 索引未做 |
 | 3 | AI 整理（仅产出提案）、冲突检测、Pydantic 校验 | 未开始 |
 | 4 | 审核流 + 差异预览（CLI） | 未开始 |
-| 5 | MCP stdio（只读 search/get/list 已通；propose/status 待权限分级）、Git 自动备份 | **P5-01 部分完成** |
+| 5 | MCP stdio、Git 自动备份 | **MCP 4/5 完成**（`memory_status` 与权限分级未做） |
 | 6 | 打包（PyInstaller）、开机常驻、基础 Web UI | 未开始 |
 
 ## 明确不做
 
-- 不向任何 AI 工具的原生记忆文件**回写**内容。只读采集 + 单向只读快照。
-- 不训练、不托管模型。AI API 完全可选，不配置也能完成采集、审核、分发、备份。
+- 不向任何 AI 工具的原生记忆文件**回写**内容。只读采集 + 单向只读快照（ADR-002）。
+- 不提供 `memory_write`：AI 只能提提案，不能直接入库（ADR-003、ADR-012）。
+- 不训练、不托管模型。AI API 完全可选，不配置也能完成采集、审核、检索、备份。
 - 不在 v0.x 建立云端账户、SaaS 或自建同步服务器。
 - 不把 GitHub 当实时同步总线。
 
 ## 许可证
 
-待定（倾向 Apache-2.0：含专利授权，便于被其他工具集成）。在确定之前请勿分发。
+**尚未选定。** 在选定之前，本仓库默认保留所有权利（all rights reserved）。
+倾向 Apache-2.0（含专利授权，便于被其他工具集成），但需要所有者拍板后再对外表述。
 
 ## 文档索引
 
@@ -132,9 +179,14 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
 | [`AGENTS.md`](AGENTS.md) | 工程契约：7 条不可推翻的决策、编码约定、明确禁止。**AI Agent 必读** |
 | [`HANDOFF.md`](HANDOFF.md) | 现状交接：做到哪、怎么跑、已知问题、下一步 |
 | [`docs/00-positioning.md`](docs/00-positioning.md) | 定位与竞品差异 |
-| [`docs/01-decisions.md`](docs/01-decisions.md) | ADR 记录：已定 9 条 + 1 条待决，含每条的代价与复审时点 |
+| [`docs/01-decisions.md`](docs/01-decisions.md) | ADR 记录：12 条（ADR-010 待拍板），含每条的代价与复审时点 |
 | [`docs/02-roadmap.md`](docs/02-roadmap.md) | 阶段拆解与可领工单 |
 | [`docs/03-plan-review.md`](docs/03-plan-review.md) | 策划书 ↔ 当前决定的对照表（防止做回已否决功能） |
+| [`docs/04-upstream-formats.md`](docs/04-upstream-formats.md) | 上游记忆来源的路径/格式基线，逐条标置信度（实盘/官方/镜像） |
 | [`docs/reference/`](docs/reference/) | 项目策划书原文与可读版，只读 |
 
 用 Claude Code / Cursor 接手时，`CLAUDE.md` 与 `.cursor/rules/project.mdc` 会指向上面的入口。
+
+> **上游格式是猜的吗？** 不是。`docs/04-upstream-formats.md` 里每条路径都标了来源：
+> `实盘`（在本机看到文件）、`官方`（厂商文档）、`镜像`（官方页抓不到时的副本）。
+> 未验证的项目单独列了一节，并注明"不得据此写代码"。
