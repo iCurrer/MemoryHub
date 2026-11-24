@@ -1,4 +1,4 @@
-﻿# 开发路线与工单
+# 开发路线与工单
 
 本文件是**可执行的任务清单**，供人或 AI Agent 直接领取。领取规则：
 
@@ -217,7 +217,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 |---|---|---|
 | P4-01 | 差异预览：`memoryhub diff <id>` 对比提案与现有条目 | ✅ 完成 |
 | P4-02 | 批量操作：`inbox list --auto` / 批量 approve | ✅ 完成（`approve --all` + `--category` / `--tag` / `--dry-run`） |
-| P4-03 | 变更摘要：`memoryhub log --since 7d` | ⬜ 未做 |
+| P4-03 | 变更摘要：`memoryhub log --since 7d` | ✅ 完成 |
 
 **P4-01 实际落地**：`diff <id>` 默认自动配对 —— 取**同一 `source_path` 的最新已批准条目**作为对比对象，
 输出元信息（状态/类别/信任/来源/时间）+ 统一 diff；`--against <id>` 可显式指定；无配对时打印正文并说明原因。
@@ -225,9 +225,23 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 **P4-02 实际落地**：`approve --all`，可按 `--category` / `--tag` 过滤，`--dry-run` 只列出。
 **blocked 永远跳过**（打印到 stderr），不因为批量操作就绕过 ADR-003。
 
+**P4-03 实际落地**：`src/memoryhub/backup/history.py` + `memoryhub log`。
+
+- 历史来源是 **vault 自己的 git log**，不另建变更日志 —— `git log` 就是 ADR-003 依赖的回滚依据，
+  另建一份必然与它不一致；也避免在 vault 里多出一个"不是记忆"的文件。
+- `--since` 支持 `7d` / `12h` / `2w` / ISO 日期，翻译成 git 的 `--since`。
+- `--no-renames`：git 的 rename 状态会把新旧两个路径塞进一行，解析会错位；审核回看不需要该区分。
+- 没有提交或不是 git 仓时**明确报错**并给出下一步，而不是返回空列表假装"没有变化"。
+
 **顺带修掉一个真隐患**：`new` / `list` 等命令此前不检查 vault 是否存在，config 未写入时会
 静默写到硬编码的 `D:/my-memory`。一次测试运行真的把数据写进了那里。现在 `_store()` 直接报错并
 提示 `init`，有测试覆盖。
+
+**同批修复（P4-03 之后）**：`save()` 增加乐观并发校验（`StaleEntryError`）。记忆对象记住加载时的
+`updated_at`（`_base_updated_at`，不序列化），写入前与磁盘比对，不一致即拒绝并提示 `store.get()`
+重新加载。根因是"status 与文件位置是两个真相源"：保存过期快照会把已批准条目搬回 `inbox/pending`。
+`set_status` / `stamp_validity` 内部重新加载，因此不受影响。**已知局限**：时间戳为秒级，
+同一秒内的并发写入检测不到。
 
 ---
 
