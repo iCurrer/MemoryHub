@@ -59,6 +59,8 @@
 
   .tip { color: var(--dim); font-size: 12px; margin: 0 0 12px; }
   .empty { color: var(--faint); padding: 28px 4px; }
+  .accessline { color: var(--faint); font-size: 11px; padding: 0 2px 6px; letter-spacing: 0.2px; }
+  .accessline b { color: var(--dim); font-weight: 600; }
 
   .item {
     background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
@@ -167,6 +169,7 @@
 
 <main>
   <section class="cards" id="cards"></section>
+  <div class="accessline" id="accessline"></div>
 
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="pending" aria-selected="true">待审<span class="count" id="c-pending"></span></button>
@@ -322,6 +325,15 @@ function renderCards(o) {
       el("div", { class: "sub" }, Object.entries(o.by_status).map(([k, v]) => k + " " + v).join(" / ")))
   );
   document.getElementById("vault").textContent = o.vault;
+  const a = o.access || { calls: 0, labels: [], read_entries: 0, last_at: "" };
+  document.getElementById("accessline").replaceChildren(
+    a.calls
+      ? el("span", {},
+          "读取日志 ", el("b", {}, String(a.calls)), " 次 · ",
+          el("b", {}, String(a.read_entries)), " 条被读过 · ",
+          (a.labels.length ? a.labels.join(", ") : "未标注客户端"),
+          " · 最近 ", (a.last_at || "").slice(0, 16).replace("T", " "))
+      : el("span", {}, "还没有读取记录。给每个客户端的 mcp 配置加 --label，这里就能分清是谁在读。"));
   document.getElementById("c-pending").textContent = pending ? String(pending) : "";
   document.getElementById("c-proposals").textContent = o.conflicts.open ? String(o.conflicts.open) : "";
 }

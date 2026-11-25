@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import __version__, boundary, config, conflicts, review, sync
+from . import __version__, access, boundary, config, conflicts, review, sync
 from .adapters import ADAPTERS, build
 from .ai import (
     DEFAULT_MAX_PAIRS,
@@ -529,7 +529,7 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     except ImportError as exc:  # pragma: no cover - depends on the install
         print(f"error: the MCP server needs the `mcp` package: {exc}", file=sys.stderr)
         return 1
-    serve(getattr(args, "vault", None), args.permission)
+    serve(getattr(args, "vault", None), args.permission, args.label)
     return 0
 
 
@@ -1502,6 +1502,53 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_access(args: argparse.Namespace) -> int:
+    """Who has been reading this vault (P5-07).
+
+    Answers a question the vault could not answer before: an entry three clients
+    read yesterday and an entry nobody has opened look identical on disk. The log
+    is a hint, not an audit trail -- it records the ``--label`` the user typed
+    into each client's config, never MCP's self-reported clientInfo.
+    """
+    store = _store(args)
+    if args.entry:
+        slot = access.for_entry(store.root, args.entry)
+        if not slot["reads"]:
+            print(f"no reads recorded for {args.entry}")
+            print("  (logging starts from the first MCP call after this build; "
+                  "earlier reads left no trace)")
+            return 0
+        print(f"{args.entry}  read {slot['reads']}x")
+        print(f"  by      {', '.join(slot['labels']) or '-'}")
+        print(f"  via     {', '.join(slot['tools'])}")
+        print(f"  last    {slot['last_at']}")
+        return 0
+
+    summary = access.summary(store.root)
+    if not summary["calls"]:
+        print("no reads recorded yet")
+        print("  add --label to each client's mcp config so this file can tell "
+              "them apart:")
+        print('  memoryhub mcp --permission propose --label claude-code')
+        return 0
+    print(f"calls    {summary['calls']}  ({summary['read_entries']} distinct entries)")
+    print(f"labels   {', '.join(summary['labels']) or '-'}")
+    print(f"last     {summary['last_at'] or '-'}")
+    tally = access.tally(store.root)
+    top = sorted(tally.items(), key=lambda kv: (-kv[1]["reads"], kv[0]))[: args.limit]
+    if top:
+        print()
+        for entry_id, slot in top:
+            entry = store.get(entry_id)
+            head = ""
+            if entry is not None:
+                head = " ".join(entry.body.split())[:44]
+            elif slot["reads"]:
+                head = "(entry no longer in the vault)"
+            print(f"  {slot['reads']:>3}x  {entry_id}  {head}")
+    return 0
+
+
 # ------------------------------------------------------------------- parser
 
 
@@ -1701,10 +1748,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--permission",
         choices=("read", "propose", "admin"),
         default=os.environ.get("MEMORYHUB_MCP_PERMISSION", "propose"),
-        help="capability tier: read (3 tools) / propose (+memory_propose) / "
+        help="capability tier: read (6 tools) / propose (+memory_propose) / "
         "admin (+memory_status). Default: propose, or $MEMORYHUB_MCP_PERMISSION",
     )
+    p_mcp.add_argument(
+        "--label",
+        default=os.environ.get("MEMORYHUB_MCP_LABEL", ""),
+        help="name this client in the access log (e.g. claude-code, codex). "
+        "Cosmetic only: it never widens what --permission allows. "
+        "Default: $MEMORYHUB_MCP_LABEL",
+    )
     p_mcp.set_defaults(func=cmd_mcp)
+
+    p_access = sub.add_parser(
+        "access",
+        parents=[vault_arg],
+        help="who has been reading the vault (P5-07, local JSONL log)",
+    )
+    p_access.add_argument("--entry", default="", help="one entry id instead of the tally")
+    p_access.add_argument("--limit", type=int, default=10, help="rows in the tally (default 10)")
+    p_access.set_defaults(func=cmd_access)
 
     p_sync = sub.add_parser(
         "sync",

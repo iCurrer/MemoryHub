@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import conflicts, sync
+from . import access, conflicts, sync
 from .models import CATEGORIES, MemoryEntry, ValidationError
 from .storage.markdown_store import StaleEntryError, VaultStore
 
@@ -220,6 +220,7 @@ class App:
                     for plan in plans
                 ],
             },
+            "access": access.summary(self.store.root),
         }
 
     def pending(self) -> List[Dict[str, Any]]:

@@ -376,6 +376,14 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 **真机结果**：42 条里 10 条偏低（1 条完整住址 → blocked，9 条学校/籍贯 → personal）。
 | P5-04 | `memoryhub backup`：本地 commit + 可选远端 | ✅ 完成 |
 | P5-06 | `memoryhub sync`：把库投影回各 AI 的受管区块 | ✅ 完成（ADR-019） |
+| P5-07 | 读取日志 + 三个上下文捷径工具 | ✅ 完成（ADR-021） |
+
+**P5-07 实际落地（2026-11-25，ADR-021）**：`logs/access.jsonl` 记录每次 MCP 读调用，
+`memoryhub access [--entry ID]` 读它；标签来自 `--label`（写进客户端配置），不读 MCP 自报的
+`clientInfo`；**不记查询词**。同时补 `memory_profile` / `memory_project_context` /
+`memory_recent_decisions` —— 「自己调三次 list 再合并」是 AI 一定会做错的指令。
+这一条是外部 2.0 方案里唯一说对的新东西；它的其余建议（常驻 daemon、Tauri + React、
+「修复」两个不存在的 bug）见 ADR-021 的否决理由。
 
 **P5-04 实际落地**：`memoryhub backup [--remote NAME] [--allow-sensitive]`。
 

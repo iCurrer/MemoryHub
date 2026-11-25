@@ -107,14 +107,27 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - 导入时**先剥掉区块**再解析，否则同步会变成下一次导入的输入，库会慢慢填满自己的副本
 - 只投影 `approved` 且未过期、未被取代的条目；`pending` 是提案，`superseded` 是历史，都不该分发给读者
 
-**MCP（5 个工具，stdio）**
+**MCP（7 个工具，stdio）**
 
 - `memory_search` / `memory_get` / `memory_list`：只返回**已批准且未过期**的条目，每条带来源与有效期
+- `memory_profile` / `memory_project_context` / `memory_recent_decisions`：三个上下文捷径。
+  存在理由很朴素——让 AI "自己调三次 list 再合并"是一句它一定会做错的指令：它会漏掉 `decision`，
+  或者把 `project` 写成复数然后收到一个空列表。每个捷径答一个会话开头真的会问的问题，
+  并且在没查到东西时**明说没查到**
 - `memory_propose`：AI 客户端可以交提案，但**只能进待审队列**；命中密钥形状直接 `blocked`
 - `memory_status`：队列深度与索引健康（仅 `admin` 级别）
 - 权限分级：`--permission read|propose|admin`（默认 `propose`）。权限按**进程**划分，
   不按客户端身份 —— MCP 的 `clientInfo` 是自报且无认证的，按它分级只是安全剧场
 - 没有 `memory_write` —— **任何级别**都无法直接把内容写进正式库
+
+**谁读过这条记忆（P5-07）**
+
+- 每次 MCP 读调用追加一行到 `logs/access.jsonl`：工具、条目 id、权限级别、标签
+- 标签来自 `--label`（写进那个客户端自己的配置里），**不是** MCP 自报的 `clientInfo`
+- 不记录查询词。搜索串往往比答案更暴露（"我的期望薪资"），这个日志回答的是"谁读过"，
+  不是"问了什么"
+- `memoryhub access` 看总览，`--entry <id>` 看单条。它是**提示，不是审计**：1 MiB 轮转、
+  只留一代、写失败绝不打断读
 
 **本机页面（P6-03）**
 
@@ -132,7 +145,7 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目
 - 保存前校验快照是否过期（`StaleEntryError`），不会把已批准的条目误降级
-- 373 个单元测试（含 16 个片段配对、51 个冲突/取代、20 个回写分发、28 个本机页面、32 个 CLI 端到端、11 个 watcher、9 个索引、19 个 MCP 含真实 stdio 会话），全部通过
+- 402 个单元测试（含 16 个片段配对、51 个冲突/取代、20 个回写分发、28 个本机页面、14 个访问日志、32 个 CLI 端到端、11 个 watcher、9 个索引、34 个 MCP 含真实 stdio 会话），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 
@@ -236,7 +249,7 @@ D:/project/MemoryHub        代码（本仓库，可开源）
   src/memoryhub/            实现
     adapters/               外部来源适配器（只读）
     watcher/                轮询 + 防抖 + 哈希
-    mcp/                    只读 MCP 服务端
+    mcp/                    MCP 服务端（7 个工具，读 + 提案）
   tests/                    单元测试
   docs/                     定位、决策、路线、上游格式基线、策划书
   tools/                    一次性转换脚本

@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from memoryhub import conflicts, web  # noqa: E402
+from memoryhub import access, conflicts, web  # noqa: E402
 from memoryhub.models import MemoryEntry  # noqa: E402
 from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
 
@@ -142,6 +142,23 @@ class OverviewTests(ServerCase):
         self.assertEqual(data["sync"]["live"], 2)
         self.assertGreater(data["sync"]["block_chars"], 0)
         self.assertEqual(len(data["sync"]["targets"]), 3)
+        # The page states who has been reading; with no MCP calls yet it must
+        # report zero rather than omit the field (a missing key reads as "not
+        # implemented" in the browser).
+        self.assertEqual(data["access"]["calls"], 0)
+        self.assertEqual(data["access"]["labels"], [])
+
+    def test_overview_reports_reads_once_they_happen(self) -> None:
+        app = self.start()
+        entry = self.seed("一条被读过的记忆。", category="preference")
+        self.store.set_status(entry.id, "approved")
+        access.record(self.store.root, "memory_search", [entry.id], "propose", "claude-code")
+
+        status, data = self.request("GET", "/api/overview", token=app.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(data["access"]["calls"], 1)
+        self.assertEqual(data["access"]["labels"], ["claude-code"])
+        self.assertEqual(data["access"]["read_entries"], 1)
 
     def test_pending_lists_blocked_first(self) -> None:
         app = self.start()
