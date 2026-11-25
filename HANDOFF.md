@@ -16,7 +16,9 @@
 
 **审核状态（2026-11-25 已解）**：53 条 pending 已批量审完 —— **50 approved / 2 rejected / 1 留 pending**。MCP 可见性（ADR-012 只返回 approved）实测 50 条：`memory_list` 50，中文双字检索可用（论文 4 / 记忆 7 / 考公 2），英文 `WORLD_001` 1，不存在的词返回 0。**别的 AI 现在能查到东西了。**
 
-两处保留不是漏审：`e1d1da5c` 是 Claude Code 默认提示的残片（不是记忆）、`4f686a73` 是无主语的孤儿状态行（切分产物），两条已 `rejected` 保留可追溯；`d0f97a9f` 是门牌级住址（`sensitivity=sensitive`，`trust=blocked`），**批准被存储层硬拦**，需人决定「降敏感度后批准 / 拒绝 / 就留在 pending」。批量执行的 22 处分类修正来自 `docs/audits/classify-labels-2026-11-25.tsv` 的人工标注。
+两处保留不是漏审：`e1d1da5c` 是 Claude Code 默认提示的残片（不是记忆）、`4f686a73` 是无主语的孤儿状态行（切分产物），两条已 `rejected` 保留可追溯。
+
+**第三条已拍板（2026-11-25，所有者决定）：留 `pending`，不批不拒。** 它是一条门牌级住址，`sensitivity=sensitive`、`trust=blocked`。理由：门牌号对 AI 服务没有功能收益（知道在哪个城市就够了），而 MCP 只返回 `approved`，一旦入库就是任何接上的 AI 都能读到并复述。**技术上不会被误批**——`set_status` 对 `blocked` 硬拒绝；要批必须先降 `sensitivity`，那一步是有意的摩擦。该 id 已写入 `~/.memoryhub/review.json` 的跳过表，下次 `review` 会把它排到队尾并提示"之前跳过过"，按 `q` 退出即可。**不要为了"清干净"去降它的敏感度。**
 
 ## 2. 仓库信息
 
@@ -180,11 +182,11 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 采集、整理（单向）、审核、检索、备份已闭环，**且已有 50 条 approved 实际可查**。按优先级：
 
 1. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。**唯一一项还没拍板就能做的。**
-2. **那条 blocked 的住址**：`sensitivity` 是"要不要让别的 AI 读到门牌号"的问题，不是分类问题。需所有者拍板（见 §1）。
-3. **P3-04 → P3-05 语义去重与冲突检测**：审计数据证明这两项对 AI 的依赖度最高（改错分类 1 秒，判断"是否同一件事"要 1 分钟）。50 条 now approved，去重才有真实素材。
-4. **P3-03 余下部分**：摘要字段（拆分与分类已通）。
-5. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
-6. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。
+2. **P3-04 → P3-05 语义去重与冲突检测**：审计数据证明这两项对 AI 的依赖度最高（改错分类 1 秒，判断"是否同一件事"要 1 分钟）。50 条已 approved，去重才有真实素材。
+3. **P3-03 余下部分**：摘要字段（拆分与分类已通）。
+4. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
+5. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。
+6. 已结案：53 条 pending 已审完（50 approved / 2 rejected / 1 有意留 pending，见 §1）。
 
 **已知缺口（不是 bug，是没做）**：`review` 没有 `u` 撤销上一步，误按只能靠退出时打印的 id 清单
 手工 `reject <id>` 补救。若真实使用中出现"想回头改上一条"的抱怨，再加（ADR-017 复审时点）。
