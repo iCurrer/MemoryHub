@@ -97,45 +97,50 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 ## 快速开始
 
+依赖装在独立虚拟环境里。**不要用裸 `python` 跑本项目的 MCP 服务**——系统解释器通常没有
+`pyyaml` / `mcp`，症状是客户端显示连不上，而不是报缺包。
+
 ```bash
-pip install pyyaml mcp
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install "mcp>=2.0,<3" "pyyaml>=6.0"
+# 中国大陆网络下清华源常返回空索引，改用官方源 + 代理：
+# .venv/Scripts/python.exe -m pip install "mcp>=2.0,<3" "pyyaml>=6.0" --proxy http://127.0.0.1:7897
 
 # 1. 创建记忆库（独立于本仓库，默认 D:/my-memory）
-PYTHONPATH=src python -m memoryhub init --vault D:/my-memory
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub init --vault D:/my-memory
 
 # 2. 环境自检（exit 0 才算通过；WARN 不算失败）
-PYTHONPATH=src python -m memoryhub doctor
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub doctor
 
 # 3. 采集：从已装的 AI 工具读入待审条目
-PYTHONPATH=src python -m memoryhub scan --dry-run      # 先看会导入什么
-PYTHONPATH=src python -m memoryhub scan
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub import --dry-run   # 先看会导入什么
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub import             # 加 --ai 交给自己的模型整理
 
-# 4. 审核
-PYTHONPATH=src python -m memoryhub list --status pending
-PYTHONPATH=src python -m memoryhub show <id>
-PYTHONPATH=src python -m memoryhub approve <id>
+# 4. 审核（一屏一条：a 批 / r 拒 / c 改分类 / s 跳过 / q 退出）
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub review
 
 # 5. 检索
-PYTHONPATH=src python -m memoryhub search "pnpm"
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub search "论文"
 
 # 6. 分类建议（先看，再决定是否写）
-PYTHONPATH=src python -m memoryhub recategorize          # dry run，打印原分类 -> 建议 + 依据
-PYTHONPATH=src python -m memoryhub recategorize --apply
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub recategorize          # dry run
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub recategorize --apply
 
 # 7. 让别的 AI 客户端来查（stdio，前台阻塞）
-PYTHONPATH=src python -m memoryhub mcp
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub mcp
 
 # 8. 跑测试
-PYTHONPATH=src python -m unittest discover -s tests -v
+PYTHONPATH=src .venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
-接到 AI 客户端（Claude Desktop / Cursor 等）：
+接到 AI 客户端（Claude Code 已实测通过，Claude Desktop / Cursor 同理）：
 
 ```json
 {
   "mcpServers": {
     "memoryhub": {
-      "command": "python",
+      "type": "stdio",
+      "command": "D:/project/MemoryHub/.venv/Scripts/python.exe",
       "args": ["-m", "memoryhub", "mcp", "--vault", "D:/my-memory"],
       "env": { "PYTHONPATH": "D:/project/MemoryHub/src" }
     }
@@ -143,15 +148,34 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 }
 ```
 
-> 协议层已用真实 subprocess 跑过完整握手（`initialize` → `tools/list` → `tools/call`），
-> 但**未在具体客户端里实机接线**。连不上先看客户端日志。
+Claude Code 写在 `~/.claude.json` 的 `mcpServers` 下；用 `claude mcp list` 验证，
+应看到 `√ Connected`。
 
-安装为命令（需要 hatchling）：
+**第二道门：工具权限。** 服务连通不代表 AI 能调用——Claude Code 默认拒绝 MCP 工具，
+表现为 `permission not granted`。首次使用需要放行：
 
 ```bash
-pip install -e .
+claude -p "我的毕业论文题目是什么" \
+  --allowedTools "mcp__memoryhub__memory_search,mcp__memoryhub__memory_list,mcp__memoryhub__memory_get"
+```
+
+或者在客户端里用 `/permissions` 永久放行 `mcp__memoryhub__*`。这是客户端的权限模型，
+不是服务端的问题——服务端只负责按 `--permission` 决定暴露哪些工具。
+
+> 实机验证记录（2026-11-25）：Claude Code 通过 stdio 连上后，问「毕业论文题目 / 学校」，
+> 模型调用 `memory_search` 两次（`毕业论文` 返回 4 条、`学校` 返回 1 条），答出了正确结果，
+> 并且指出库里存在一条「题目尚未冻结」的旧条目与已定题目矛盾——它没有编造，也没有
+> 擅自判断谁覆盖谁。**这正是 P3-05 冲突检测要解决的问题。**
+
+安装为命令（可选，需要 hatchling）：
+
+```bash
+.venv/Scripts/python.exe -m pip install -e .
 memoryhub doctor
 ```
+
+装不上 `hatchling`（部分镜像源不提供）不影响使用：上面的 `PYTHONPATH=src` 方式功能完全一致，
+只是每次要多打几个字。
 
 ## 目录结构
 

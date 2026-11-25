@@ -8,13 +8,20 @@
 
 ## 1. 一句话现状
 
-**三个来源（WorkBuddy / Claude Code / Codex）→ 整理 → 审核 → vault → CLI / MCP 检索，全链路已通。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**236 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：语义去重与冲突检测（P3-04/05）、P3-00 fallback 显式化、回写分发、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+**三个来源（WorkBuddy / Claude Code / Codex）→ 整理 → 审核 → vault → CLI / MCP 检索，全链路已通。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 按 `--permission` 分级暴露 4–5 个工具，`backup` 带敏感闸门。**254 个单元测试全过**（装好 `mcp` 之后 `test_mcp` 的 18 个也跑起来了；此前它因缺 SDK 无法导入）。**未做：语义去重与冲突检测（P3-04/05）、P3-00 fallback 显式化、回写分发、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
 
 **AI 整理怎么工作（ADR-016）**：`Adapter.discover()` 仍是算法（找文件是确定的）；`read()` 在 `--ai` 模式改走模型（拆分 + 分类是语义的）；模型返回的每一条必须带从原文逐字复制的 `quote`，归一化后定位不到就标记待核实。**这条 quote 校验是唯一能自动化的防幻觉手段，不要删。**
 
 **审核怎么工作（ADR-017）**：`review` 一屏一条，按键 `a` 批 / `r` 拒 / `c` 改分类 / `s` 跳过 / `q` 退出。**队列每次从 vault 重新推导，只有"跳过的 id"被记住**（存 `~/.memoryhub/review.json`，不在 vault 内）。非 TTY 一律拒绝并指向 `approve <id>`。
 
 **审核状态（2026-11-25 已解）**：53 条 pending 已批量审完 —— **50 approved / 2 rejected / 1 留 pending**。MCP 可见性（ADR-012 只返回 approved）实测 50 条：`memory_list` 50，中文双字检索可用（论文 4 / 记忆 7 / 考公 2），英文 `WORLD_001` 1，不存在的词返回 0。**别的 AI 现在能查到东西了。**
+
+**MCP 真机接入已验证（2026-11-25，首次）**：依赖装在 `D:/project/MemoryHub/.venv`（`mcp 2.3.0` + `pyyaml`），配置写进 `~/.claude.json` 的 `mcpServers`，`claude mcp list` 显示 `√ Connected`。真实会话测试：问「毕业论文题目 / 学校」，Claude 调 `memory_search` 两次（4 条 / 1 条），**答出正确结果且没有编造**。两个坑记在这里：
+
+1. **`command` 必须指向 venv 的 python**（`D:/project/MemoryHub/.venv/Scripts/python.exe`），写裸 `python` 会让客户端静默连不上——系统解释器没有 `yaml`/`mcp`。
+2. **连通 ≠ 可调用**。Claude Code 默认拒绝 MCP 工具，返回 `permission not granted`；需要 `--allowedTools "mcp__memoryhub__*"` 或在 `/permissions` 里放行。这是客户端权限模型，不是服务端问题。
+
+**这次真机测试撞出一处真实冲突**：Claude 指出库里有条 401 字的旧条目写「毕业论文（尚未冻结）：先确定题目」，与已定题目矛盾，且两者都是 `approved`、`valid_until=null`、`superseded_by=null`——**库自己判不出谁覆盖谁**。这就是 P3-05 的第一个真实用例，不是我编的需求。
 
 两处保留不是漏审：`e1d1da5c` 是 Claude Code 默认提示的残片（不是记忆）、`4f686a73` 是无主语的孤儿状态行（切分产物），两条已 `rejected` 保留可追溯。
 
@@ -107,7 +114,7 @@ cd /d/project/MemoryHub
 pip install pyyaml mcp      # 运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 Ran 236；缺 mcp 时 1 error（test_mcp 导入），235 通过
+PYTHONPATH=src .venv/Scripts/python.exe -m unittest discover -s tests -v   # 期望 Ran 254, OK
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -179,13 +186,14 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 
 ## 8. 下一步
 
-采集、整理（单向）、审核、检索、备份已闭环，**且已有 50 条 approved 实际可查**。按优先级：
+采集、整理（单向）、审核、检索、备份已闭环，**已有 50 条 approved 实际可查，且 Claude Code 真机接入通过**。按优先级：
 
-1. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。**唯一一项还没拍板就能做的。**
-2. **P3-04 → P3-05 语义去重与冲突检测**：审计数据证明这两项对 AI 的依赖度最高（改错分类 1 秒，判断"是否同一件事"要 1 分钟）。50 条已 approved，去重才有真实素材。
-3. **P3-03 余下部分**：摘要字段（拆分与分类已通）。
-4. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
-5. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。
+1. **P3-05 冲突检测与取代链维护（优先级最高，已从"计划"变成"有真实用例"）**：真机测试里 Claude 撞到一条 401 字的旧条目写「毕业论文（尚未冻结）」，与已定题目矛盾，两条都 `approved` 且互不 `supersedes`。**这类条目会让 AI 给出两个互相矛盾的答案，而它无法判断该信哪个**——这是当前唯一已经实际发生的错误，用户看得见。实现要点：AI 只出建议（谁覆盖谁 + 理由），`supersedes`/`valid_until` 由人或 `approve` 落，**绝不自动写**（ADR-006 的字段已经就位，缺的只是产出建议的那一层）。
+2. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。
+3. **P3-04 语义去重**：判断"两条说的是不是同一件事"。放在 P3-05 之后，因为去重要先有"谁覆盖谁"的判断作为依据，否则合并没有方向。
+4. **P3-03 余下部分**：摘要字段（拆分与分类已通）。
+5. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
+6. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。
 6. 已结案：53 条 pending 已审完（50 approved / 2 rejected / 1 有意留 pending，见 §1）。
 
 **已知缺口（不是 bug，是没做）**：`review` 没有 `u` 撤销上一步，误按只能靠退出时打印的 id 清单
