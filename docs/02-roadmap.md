@@ -197,6 +197,24 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 ---
 
+### P2-08 条目粒度 + 分类归属 ✅
+
+- **落位**：`adapters/base.py`（`split_oversized` / `drop_heading_only`）、`classify.py`、CLI `recategorize` / `scan --refresh`、`doctor` 的 `mcp visibility`
+- **动因**：ADR-014。首次导入的 42 条中位数 90 字、最长 1276 字，且 **100% 是 `profile`**，导致审核无意义、MCP 查不到任何东西
+- **实际落地**：
+  - 单条上限 400 字；超出按子标题 → 空行段落 → 句子三级回退；父标题并入首个子条目，不产生空条目
+  - 分类改为加权打分，权重 3 决定性（`github.com` / `绝不` / `铁律`…）；同分按 decision > profile > preference > project
+  - `recategorize` 默认 dry-run，打印「原 → 新 + 命中词与权重」；`--apply` 才写
+  - `scan --refresh` 把来源不再产生的 pending 条目转 `archived`（可恢复），避免一次切分留下两代条目
+- **实测**（`D:/my-memory`）：42 → 59 条（53 pending + 6 archived）；最长 1276 → 401 字；`profile` 占比 100% → 40%；分类 decision 21 / profile 21 / preference 10 / project 7
+- **完成判据**（全部达成，`tests/test_classify.py` 17 例 + `tests/test_migrate.py` 9 例）：
+  1. 长条目切分后无空条目、无超过上限的碎片
+  2. 含 `github.com` 的段落即使同时含"必须/不得"仍判为 `project`
+  3. `recategorize` 无 `--apply` 时不改任何文件
+  4. `scan --refresh` 归档被取代的旧条目，`--dry-run` 下不归档
+
+---
+
 ## 阶段 3 · AI 整理（仅产出提案）
 
 | 工单 | 内容 | 落位 | 完成判据 |

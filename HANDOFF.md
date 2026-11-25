@@ -8,7 +8,9 @@
 
 ## 1. 一句话现状
 
-**三个来源（WorkBuddy / Claude Code / Codex）→ 审核 → vault → CLI / MCP 检索，全链路已通。** `scan`/`watch` 采集进 `inbox/pending`，`diff`/`approve` 审核入库，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**160 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：阶段 3 AI 整理（语义去重/冲突检测）、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+**三个来源（WorkBuddy / Claude Code / Codex）→ 审核 → vault → CLI / MCP 检索，全链路已通。** `scan`/`watch` 采集进 `inbox/pending`，`diff`/`approve` 审核入库，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**180 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：阶段 3 AI 整理（语义去重/冲突检测）、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+
+**当前最大断点（2026-11-25）**：`D:/my-memory` 里 53 条全是 `pending`，`approved` 为 0。MCP 的可见性规则（ADR-012）只返回 `approved`，所以**别的 AI 现在查不到任何东西**。`doctor` 的 `mcp visibility` 会明确报这一条。下一步不是加功能，是让人把这 53 条审完——或者先做 P4-05 交互式审核。
 
 ## 2. 仓库信息
 
@@ -18,7 +20,7 @@
 | 远端 | `origin → https://github.com/iCurrer/MemoryHub.git`（**公开仓**） |
 | 分支 | `main` |
 | 提交 | 30（2026-11-25 曾对全部历史做一次提交信息改写；随后删除并重建远端仓，旧对象已不存在） |
-| 数据目录 | `D:/my-memory`（已创建，42 条记忆，**自身独立 git 仓、无远端**） |
+| 数据目录 | `D:/my-memory`（已创建，59 条：53 pending + 6 archived，**自身独立 git 仓、无远端**） |
 | 运行时依赖 | **`pyyaml>=6.0`、`mcp>=2.0,<3`**（后者连带 pydantic/starlette/uvicorn 等，见 ADR-012） |
 
 ### 2.1 三层边界（ADR-013，别搞混）
@@ -50,6 +52,7 @@
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
 | `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析 | 稳定（注意：`save()` 会整份重写，加配置项前先改成合并写入） |
 | `src/memoryhub/boundary.py` | 两仓隔离：`violations()`、远端检查、`pre-push` 钩子安装 | 稳定（ADR-013） |
+| `src/memoryhub/classify.py` | 加权规则分类（决定性权重 3）、`split_oversized` 的配套判据 | 稳定（ADR-014）；规则表是中文关键词，换语言需重写 |
 | `tools/lint_staged.py` | 暂存内容 + 提交信息的路径/PII 扫描；`--all` 全量、`--message-only` | 稳定（ADR-013） |
 | `tools/hooks/` + `tools/setup_dev.sh` | `core.hooksPath` 钩子，clone 后跑一次 | 稳定；新增规则改 `RULES` 与 `pii-allowlist.txt` |
 | `src/memoryhub/cli.py` | 18 个命令 | 稳定，命令会继续增加 |

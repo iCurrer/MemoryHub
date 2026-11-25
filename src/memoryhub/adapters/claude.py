@@ -27,9 +27,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .. import frontmatter
+from .. import boundary, frontmatter
 from ..models import MemoryEntry
-from .base import Adapter, SourcePath, sections
+from .base import Adapter, SourcePath, drop_heading_only, sections, split_oversized
 
 #: Claude Code loads a CLAUDE.md of 4 MiB or smaller and skips a larger one
 #: entirely, so importing more than that would be a lie.
@@ -88,6 +88,11 @@ class ClaudeAdapter(Adapter):
         self, path: Path, layer: str, precedence: int
     ) -> Optional[SourcePath]:
         if not path.is_file():
+            return None
+        if boundary.is_inside_code_repo(path):
+            # The project's own CLAUDE.md is an engineering contract, not a
+            # memory of the person. Importing it would file the tool's rules as
+            # the user's profile.
             return None
         try:
             size = path.stat().st_size
@@ -192,7 +197,7 @@ class ClaudeAdapter(Adapter):
                 body_text = text  # not frontmatter after all; keep the text intact
 
         entries: List[MemoryEntry] = []
-        for heading, body in sections(body_text):
+        for heading, body in drop_heading_only(split_oversized(sections(body_text))):
             tags = [self.name]
             slug = _slug(heading)
             if slug:

@@ -56,8 +56,10 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 | `claude` | `~/.claude/CLAUDE.md`（用户档案）、`./CLAUDE.md`、`./CLAUDE.local.md`、`.claude/rules/*.md` |
 | `codex` | `AGENTS.md` 指令链：全局 → 项目根 → cwd，`AGENTS.override.md` 遮蔽同目录 `AGENTS.md` |
 
-- `scan`：一次性采集，按内容指纹去重，`--dry-run` 可预览
+- `scan`：一次性采集，按内容指纹去重，`--dry-run` 可预览；`--refresh` 把来源不再产生的 pending 条目转 `archived`（重扫后不留两代条目）
 - `watch`：2 秒轮询 + 防抖 + 哈希，只导入真正变化的文件（`--once` 供 cron/测试）
+- **粒度控制**：单条上限 400 字，超出按「子标题 → 空段落 → 句子」切分；父标题并入首个子条目，纯标题条目不落库（ADR-014）
+- **分类**：`recategorize` 按内容加权打分给出建议，默认 dry-run 并打印「命中词与权重」，`--apply` 才写
 
 **备份（P5-04）**
 
@@ -116,10 +118,14 @@ PYTHONPATH=src python -m memoryhub approve <id>
 # 5. 检索
 PYTHONPATH=src python -m memoryhub search "pnpm"
 
-# 6. 让别的 AI 客户端来查（stdio，前台阻塞）
+# 6. 分类建议（先看，再决定是否写）
+PYTHONPATH=src python -m memoryhub recategorize          # dry run，打印原分类 -> 建议 + 依据
+PYTHONPATH=src python -m memoryhub recategorize --apply
+
+# 7. 让别的 AI 客户端来查（stdio，前台阻塞）
 PYTHONPATH=src python -m memoryhub mcp
 
-# 7. 跑测试
+# 8. 跑测试
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 

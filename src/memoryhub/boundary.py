@@ -107,6 +107,21 @@ def violations(vault: Path) -> List[str]:
     return problems
 
 
+def is_inside_code_repo(path: Path) -> bool:
+    """True when *path* lives under a MemoryHub source tree.
+
+    Import adapters use this to skip the project's own ``AGENTS.md`` /
+    ``CLAUDE.md``. Running ``scan`` from inside the repo would otherwise file
+    the engineering contract as the user's memories — observed once, nine
+    entries of pure noise.
+    """
+    current = Path(path).resolve().parent
+    for candidate in [current, *current.parents]:
+        if looks_like_code_repo(candidate):
+            return True
+    return False
+
+
 def remote_violations(urls: List[str]) -> List[str]:
     """Flag vault remotes that point at the code repository."""
     problems: List[str] = []

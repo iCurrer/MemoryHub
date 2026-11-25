@@ -24,6 +24,7 @@ from .backup import (
     summarise,
     write_gitignore,
 )
+from .classify import classify as classify_category
 from .frontmatter import FrontmatterError
 from .models import CATEGORIES, STATUSES, MemoryEntry, ValidationError, now_iso
 from .safety import classify
@@ -194,6 +195,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for path, message in unreadable:
         print(f"  unreadable {path}: {message}", file=sys.stderr)
 
+    approved = sum(1 for entry in entries if entry.status == "approved")
+    if not entries:
+        add("mcp visibility", "WARN", "vault is empty; nothing to query yet")
+    elif approved == 0:
+        add(
+            "mcp visibility",
+            "WARN",
+            f"0 of {len(entries)} entries approved — MCP search/list will return "
+            "nothing until you review some",
+        )
+    else:
+        add("mcp visibility", "OK", f"{approved} of {len(entries)} entries approved")
+
     report = Index(vault).check(store)
     index_level = {"ok": "OK", "absent": "WARN", "stale": "WARN", "broken": "FAIL"}[
         report["state"]
@@ -291,7 +305,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
     _unreadable_hint(unreadable)
     seen = {(e.source_adapter, e.source_path, e.body) for e in existing_entries}
 
-    sources = imported = skipped = failed = 0
+    #: Pending entries from the sources about to be re-read. ``--refresh``
+    #: archives the ones whose body no longer comes back from the adapter -- that
+    #: is how a change in splitting granularity replaces old coarse entries
+    #: instead of leaving both generations in the queue.
+    stale_candidates: List[MemoryEntry] = []
+    if args.refresh and not args.dry_run:
+        stale_candidates = [e for e in existing_entries if e.status == "pending"]
+
+    sources = imported = skipped = failed = archived = 0
     for name in selected:
         adapter = build(name)
         try:
@@ -316,12 +338,33 @@ def cmd_scan(args: argparse.Namespace) -> int:
             skipped += duplicate
             print(f"  {source.label()}: {fresh} new, {duplicate} already present")
 
+            if args.refresh and not args.dry_run and fresh:
+                new_bodies = {entry.body for entry in entries}
+                source_path = Path(source.path).as_posix()
+                outdated = [
+                    entry
+                    for entry in stale_candidates
+                    if entry.source_adapter == name
+                    and entry.source_path == source_path
+                    and entry.body not in new_bodies
+                ]
+                for entry in outdated:
+                    store.set_status(entry.id, "archived")
+                if outdated:
+                    archived += len(outdated)
+                    print(
+                        f"    archived {len(outdated)} pending entr"
+                        f"{'y' if len(outdated) == 1 else 'ies'} superseded by these"
+                    )
+
     print()
     print(f"sources   {sources}")
     if args.dry_run:
         print(f"entries   {imported} would be imported (dry run, nothing written)")
     else:
         print(f"entries   {imported} imported, {skipped} already present")
+        if archived:
+            print(f"archived  {archived} superseded (recoverable with `list --status archived`)")
     if failed:
         print(f"{failed} source(s) failed", file=sys.stderr)
         return 1
@@ -619,6 +662,70 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_recategorize(args: argparse.Namespace) -> int:
+    """Suggest a category from content, show the diff, write only with --apply.
+
+    Adapters file an entry by where it came from (a persona file is a profile).
+    That is a statement about the source, not about the sentence. This re-reads
+    each body through the rule table in :mod:`memoryhub.classify` and reports
+    what it would change -- dry by default, because a silent rewrite of the
+    user's own filing decision is exactly the kind of surprise ADR-009 bans.
+    """
+    store = _store(args)
+    entries, errors = store.scan()
+    _unreadable_hint(errors)
+
+    considered = 0
+    unmatched = 0
+    changes = []
+    for entry in entries:
+        if args.status and entry.status != args.status:
+            continue
+        if args.adapter and entry.source_adapter != args.adapter:
+            continue
+        considered += 1
+        suggested, reason = classify_category(entry.body, default=entry.category)
+        if reason.startswith("no rule"):
+            unmatched += 1
+        if suggested != entry.category:
+            changes.append((entry, suggested, reason))
+
+    for entry, suggested, reason in changes:
+        head = " ".join(entry.body.split())[:56]
+        print(f"{entry.id[:24]}  {entry.category:<10} -> {suggested:<10}  {head}")
+        print(f"{'':<24}  {reason}")
+
+    if not changes:
+        print(f"no category changes among {considered} entries")
+        if unmatched:
+            print(
+                f"{unmatched} of them matched no rule and kept their import category; "
+                "file those by hand"
+            )
+        return 0
+
+    counts: dict = {}
+    for entry, suggested, _reason in changes:
+        counts[f"{entry.category}->{suggested}"] = counts.get(f"{entry.category}->{suggested}", 0) + 1
+    print()
+    print(f"{len(changes)} of {considered} entries would change: "
+          + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    if unmatched:
+        print(f"({unmatched} entries matched no rule and keep their import category)")
+    if not args.apply:
+        print("dry run; add --apply to write these categories")
+        return 0
+
+    written = 0
+    for entry, suggested, _reason in changes:
+        entry.category = suggested
+        entry.updated_at = now_iso()
+        store.save(entry)
+        written += 1
+    print(f"{written} entries re-filed")
+    return 0
+
+
 def cmd_backup(args: argparse.Namespace) -> int:
     """Commit the vault, and optionally push it to a remote (P5-04).
 
@@ -835,6 +942,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report what would be imported without writing anything",
     )
+    p_scan.add_argument(
+        "--refresh",
+        action="store_true",
+        help="archive pending entries a source no longer produces (after a "
+        "splitting change), instead of leaving two generations in the queue",
+    )
     p_scan.set_defaults(func=cmd_scan)
 
     p_sens = sub.add_parser(
@@ -871,6 +984,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_audit.add_argument("--apply", action="store_true", help="raise the levels")
     p_audit.set_defaults(func=cmd_audit)
+
+    p_review = sub.add_parser(
+        "recategorize",
+        parents=[vault_arg],
+        help="suggest categories from content; dry run unless --apply",
+    )
+    p_review.add_argument("--apply", action="store_true", help="write the changes")
+    p_review.add_argument(
+        "--status", choices=STATUSES, default=None, help="only entries in this status"
+    )
+    p_review.add_argument(
+        "--adapter", default=None, help="only entries from this adapter"
+    )
+    p_review.set_defaults(func=cmd_recategorize)
 
     p_log = sub.add_parser(
         "log", parents=[vault_arg], help="summarise recent changes from the vault's git history"

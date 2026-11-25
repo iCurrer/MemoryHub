@@ -367,7 +367,10 @@ class ClaudeAdapterTests(unittest.TestCase):
         )
         adapter = self.adapter()
         entries = adapter.read([s for s in adapter.discover() if s.layer == "project"][0])
-        self.assertEqual(len(entries), 3)  # title + two sections
+        # Two sections. The bare `# Project` title is dropped: it carries a name
+        # and no memory, and importing it only adds an empty row to review.
+        self.assertEqual(len(entries), 2)
+        self.assertFalse(any(set(e.body.split()) <= {"#", "Project"} for e in entries))
         # CJK headings must survive slugging; otherwise the tag is silently dropped.
         self.assertIn("编码约定", [e.tags[-1] for e in entries])
         commands = [e for e in entries if "pnpm test" in e.body][0]

@@ -18,8 +18,9 @@ import tomllib
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .. import boundary
 from ..models import MemoryEntry
-from .base import Adapter, SourcePath, sections, slug
+from .base import Adapter, SourcePath, drop_heading_only, sections, slug, split_oversized
 
 #: Same-directory precedence order. ``AGENTS.override.md`` shadows ``AGENTS.md``.
 PRIMARY_NAMES = ("AGENTS.override.md", "AGENTS.md")
@@ -118,6 +119,13 @@ class CodexAdapter(Adapter):
             path = self._pick(directory, fallback)
             if path is None:
                 continue
+            if boundary.is_inside_code_repo(path):
+                print(
+                    f"skipped {path}: it is the MemoryHub engineering contract, "
+                    "not a memory of the user",
+                    file=sys.stderr,
+                )
+                continue
             size = path.stat().st_size
             if total + size > limit:
                 # Codex stops adding files once the combined text hits the cap,
@@ -147,7 +155,7 @@ class CodexAdapter(Adapter):
         text = Path(source.path).read_text(encoding="utf-8", errors="replace")
         file_hash = source.content_hash()
         entries: List[MemoryEntry] = []
-        for heading, body in sections(text):
+        for heading, body in drop_heading_only(split_oversized(sections(text))):
             tags = [self.name]
             heading_slug = slug(heading)
             if heading_slug:

@@ -23,7 +23,9 @@ from .base import (
     Adapter,
     SourcePath,
     bullets,
+    drop_heading_only,
     sections,
+    split_oversized,
     strip_quoted_metadata,
 )
 
@@ -157,9 +159,9 @@ class WorkBuddyAdapter(Adapter):
         created_at = _iso_or_none(meta.get("last updated"))
         file_hash = source.content_hash()
         if source.note == "persona-index":
-            pairs = [(section, body) for section, body in bullets(text)]
+            pairs = drop_heading_only(split_oversized(bullets(text)))
         else:
-            pairs = sections(text)
+            pairs = drop_heading_only(split_oversized(sections(text)))
         entries: List[MemoryEntry] = []
         for heading, body in pairs:
             tags = [self.name]
@@ -189,7 +191,7 @@ class WorkBuddyAdapter(Adapter):
         file_hash = source.content_hash()
 
         entries: List[MemoryEntry] = []
-        for section, body in bullets("\n".join(rest)):
+        for section, body in drop_heading_only(split_oversized(bullets("\n".join(rest)))):
             tags = [self.name]
             slug = _slug(section)
             if slug:
