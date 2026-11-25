@@ -50,6 +50,17 @@ class SourcePath:
         return f"{Path(self.path).name} [{self.layer}]" if self.layer else Path(self.path).name
 
 
+def text_hash(text: str) -> str:
+    """Hash of the text an adapter actually parsed, not of the raw file.
+
+    The two differ once ``memoryhub sync`` has written its block: the file's
+    bytes change on every sync while the parsed content does not. Hashing the
+    parsed text keeps ``source_hash`` meaning "did this source change", which is
+    what the provenance field is read for.
+    """
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 class Adapter(ABC):
     """Base class: subclasses declare a name, a default source_kind, and two methods."""
 

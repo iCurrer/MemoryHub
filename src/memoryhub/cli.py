@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import __version__, boundary, config, conflicts, review
+from . import __version__, boundary, config, conflicts, review, sync
 from .adapters import ADAPTERS, build
 from .ai import AIConfig, AIError, Provider, detect, looks_mixed, organize
 from .ai.conflict import RELATION_LABELS
@@ -957,6 +957,102 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 1 if outcome.errors else 0
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    """Project the vault into each tool's managed block (P5-06 / ADR-019).
+
+    Default is a plan. Writing needs ``--write`` because these are files other
+    tools load on every session -- a bad block travels further than a bad
+    command, and there is no undo other than the backup.
+    """
+    targets = sync.default_targets()
+    if args.to and args.to != "all":
+        wanted = [part.strip() for part in args.to.split(",") if part.strip()]
+        known = {target.key for target in targets}
+        unknown = [key for key in wanted if key not in known]
+        if unknown:
+            print(
+                f"error: 未知目标 {', '.join(unknown)}；可选 "
+                f"{', '.join(sorted(known))}（或 all）",
+                file=sys.stderr,
+            )
+            return 1
+        targets = [target for target in targets if target.key in wanted]
+
+    if args.list:
+        # Before opening the vault: "--list" answers "where would this go",
+        # which is exactly the question someone asks when the vault is missing.
+        for target in targets:
+            path, matches = target.resolve()
+            state = "存在" if path else "缺失"
+            suffix = ""
+            if len(matches) > 1:
+                suffix = f"（{len(matches)} 个候选，用最新的）"
+            print(f"{target.key:<10}{target.label:<18}{state}  {path or target.pattern}{suffix}")
+        return 0
+
+    entries, errors = _store(args).scan()
+    _unreadable_hint(errors)
+
+    live = sync.select(entries)
+    plans = sync.plan(entries, targets)
+    block_size = len(plans[0].block) if plans else 0
+
+    print(f"同步 {len(live)} 条有效记忆，每份区块约 {block_size:,} 字 → {len(plans)} 个目标")
+    print()
+    if block_size > sync.WARN_BLOCK_CHARS:
+        print(
+            f"  注意  区块 {block_size:,} 字，超过建议的 {sync.WARN_BLOCK_CHARS:,} 字。"
+            "它会出现在每一次会话的上下文里。"
+        )
+
+    pending = []
+    for item in plans:
+        head = f"{item.target.key:<10}{item.target.label:<18}"
+        if item.path is None and not item.changes:
+            print(f"{head}跳过  {item.note}")
+            continue
+        if not item.changes:
+            print(f"{head}已是最新  {item.path}")
+            continue
+        pending.append(item)
+        if not item.exists:
+            print(f"{head}将新建  {item.path}")
+        else:
+            added = len(item.after.splitlines()) - len(item.before.splitlines())
+            print(f"{head}将写入  {item.path}  （区块 {added:+d} 行）")
+        if args.diff:
+            print(item.diff)
+
+    if not pending:
+        print("\n全部已是最新，无需写入。")
+        return 0
+    if not args.write:
+        print("\ndry run：没有写任何文件。确认后加 --write。")
+        return 0
+
+    failed = 0
+    print()
+    for item in pending:
+        try:
+            path, saved = sync.write(item)
+        except OSError as exc:
+            print(f"error: 写入 {item.path} 失败：{exc}", file=sys.stderr)
+            failed += 1
+            continue
+        if not sync.verify(path, item.block):
+            print(f"warning: {path} 已写入，但回读时没找到完整区块", file=sys.stderr)
+            failed += 1
+            continue
+        tail = f"  备份 {saved.name}" if saved else "  （新建，无备份）"
+        print(f"wrote  {path}{tail}")
+
+    if failed:
+        print(f"\n{failed} 个目标有问题。原始文件都在备份里，没被删除。", file=sys.stderr)
+    else:
+        print("\n下次 import 会跳过这些区块，不会把它们当成新记忆采回来。")
+    return 1 if failed else 0
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Summarise what changed in the vault, from its own git history (P4-03)."""
     store = _store(args)
@@ -1303,10 +1399,10 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[vault_arg],
         description="Cross-AI personal memory governance layer (local-first).",
         epilog=(
-            "主线六条：init 建库 · import 导入（--ai 交给模型整理）· review 逐条审核 · "
-            "approve 按 id/批量通过 · mcp 对外服务 · doctor 体检。\n"
-            "审核辅助仍可用但不占主屏：list show search diff reject "
-            "conflicts supersede，以及其他高级命令（memoryhub <命令> --help）。"
+            "主线七条：init 建库 · import 导入（--ai 交给模型整理）· review 逐条审核 · "
+            "approve 按 id/批量通过 · sync 回写给各 AI · mcp 对外服务 · doctor 体检。\n"
+            "其余命令不占主屏，仍然可用：memoryhub <命令> --help。\n"
+            "回写只在 sync 里发生，且只动受管区块（区块外一个字节不碰）。"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1316,7 +1412,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         # Keep the usage line in step with the six-command table below; the
         # default metavar would enumerate all 20 verbs and undo the whole point.
-        metavar="{init,import,approve,review,mcp,doctor}",
+        metavar="{init,import,approve,review,sync,mcp,doctor}",
     )
 
     p_init = sub.add_parser(
@@ -1480,6 +1576,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_mcp.set_defaults(func=cmd_mcp)
 
+    p_sync = sub.add_parser(
+        "sync",
+        parents=[vault_arg],
+        help="project the vault into each tool's managed block (P5-06)",
+    )
+    p_sync.add_argument(
+        "--to",
+        default="all",
+        help="all, or a comma-separated subset of claude,workbuddy,codex",
+    )
+    p_sync.add_argument(
+        "--write", action="store_true", help="write for real (default is a plan only)"
+    )
+    p_sync.add_argument("--diff", action="store_true", help="print the unified diff")
+    p_sync.add_argument("--list", action="store_true", help="only list the target paths")
+    p_sync.set_defaults(func=cmd_sync)
+
     p_list = sub.add_parser("list", parents=[vault_arg], help="list memories")
     p_list.add_argument("--status", choices=STATUSES, default=None)
     p_list.add_argument("--category", choices=CATEGORIES, default=None)
@@ -1599,7 +1712,7 @@ def build_parser() -> argparse.ArgumentParser:
     #: complicated -- see docs/04-classify-audit.md for what the code actually is.
     #: ``_choices_actions`` is the table argparse renders for subcommands; entries
     #: are removed in place (not help=SUPPRESS, which prints the literal word).
-    mainline = {"init", "import", "scan", "approve", "review", "mcp", "doctor"}
+    mainline = {"init", "import", "scan", "approve", "review", "sync", "mcp", "doctor"}
     sub._choices_actions[:] = [
         action for action in sub._choices_actions if action.dest in mainline
     ]

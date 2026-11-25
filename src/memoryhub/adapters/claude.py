@@ -27,9 +27,16 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .. import boundary, frontmatter
+from .. import boundary, frontmatter, managed
 from ..models import MemoryEntry
-from .base import Adapter, SourcePath, drop_heading_only, sections, split_oversized
+from .base import (
+    Adapter,
+    SourcePath,
+    drop_heading_only,
+    sections,
+    split_oversized,
+    text_hash,
+)
 
 #: Claude Code loads a CLAUDE.md of 4 MiB or smaller and skips a larger one
 #: entirely, so importing more than that would be a lie.
@@ -178,8 +185,8 @@ class ClaudeAdapter(Adapter):
 
     def read(self, source: SourcePath) -> List[MemoryEntry]:
         path = Path(source.path)
-        text = path.read_text(encoding="utf-8", errors="replace")
-        file_hash = source.content_hash()
+        text = managed.strip_block(path.read_text(encoding="utf-8", errors="replace"))
+        file_hash = text_hash(text)
         if source.source_kind == "auto_memory":
             return [self._memory_entry(source, text, file_hash)]
         return self._instruction_entries(source, text, file_hash)

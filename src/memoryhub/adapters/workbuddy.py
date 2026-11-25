@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from .. import managed
 from ..models import MemoryEntry
 from .base import (
     ASSISTANT_PERSONA_FILES,
@@ -27,6 +28,7 @@ from .base import (
     sections,
     split_oversized,
     strip_quoted_metadata,
+    text_hash,
 )
 
 _STAMP_RE = re.compile(
@@ -147,7 +149,9 @@ class WorkBuddyAdapter(Adapter):
     # ---------------------------------------------------------------- read
 
     def read(self, source: SourcePath) -> List[MemoryEntry]:
-        text = Path(source.path).read_text(encoding="utf-8", errors="replace")
+        text = managed.strip_block(
+            Path(source.path).read_text(encoding="utf-8", errors="replace")
+        )
         if source.note.startswith("persona:") or source.note == "persona-index":
             return self._persona_entries(source, text)
         return self._bullets_entries(source, text)
@@ -157,7 +161,7 @@ class WorkBuddyAdapter(Adapter):
     def _persona_entries(self, source: SourcePath, text: str) -> List[MemoryEntry]:
         meta, _rest = strip_quoted_metadata(text)
         created_at = _iso_or_none(meta.get("last updated"))
-        file_hash = source.content_hash()
+        file_hash = text_hash(text)
         if source.note == "persona-index":
             pairs = drop_heading_only(split_oversized(bullets(text)))
         else:
@@ -188,7 +192,7 @@ class WorkBuddyAdapter(Adapter):
     def _bullets_entries(self, source: SourcePath, text: str) -> List[MemoryEntry]:
         meta, rest = strip_quoted_metadata(text)
         created_at = _iso_or_none(meta.get("last updated"))
-        file_hash = source.content_hash()
+        file_hash = text_hash(text)
 
         entries: List[MemoryEntry] = []
         for section, body in drop_heading_only(split_oversized(bullets("\n".join(rest)))):

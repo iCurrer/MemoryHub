@@ -18,9 +18,17 @@ import tomllib
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from .. import boundary
+from .. import boundary, managed
 from ..models import MemoryEntry
-from .base import Adapter, SourcePath, drop_heading_only, sections, slug, split_oversized
+from .base import (
+    Adapter,
+    SourcePath,
+    drop_heading_only,
+    sections,
+    slug,
+    split_oversized,
+    text_hash,
+)
 
 #: Same-directory precedence order. ``AGENTS.override.md`` shadows ``AGENTS.md``.
 PRIMARY_NAMES = ("AGENTS.override.md", "AGENTS.md")
@@ -152,8 +160,10 @@ class CodexAdapter(Adapter):
     # ---------------------------------------------------------------- read
 
     def read(self, source: SourcePath) -> List[MemoryEntry]:
-        text = Path(source.path).read_text(encoding="utf-8", errors="replace")
-        file_hash = source.content_hash()
+        text = managed.strip_block(
+            Path(source.path).read_text(encoding="utf-8", errors="replace")
+        )
+        file_hash = text_hash(text)
         entries: List[MemoryEntry] = []
         for heading, body in drop_heading_only(split_oversized(sections(text))):
             tags = [self.name]
