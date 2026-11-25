@@ -264,6 +264,28 @@ def run(
         # looks like it never remembers anything, which is the opposite of true.
         print("these were all skipped before; `review --reset` clears that list", file=out)
 
+    try:
+        _walk(store, queue, stream, out, err, state, outcome)
+    except KeyboardInterrupt:
+        # Every decision is already on disk (one write per keypress), so Ctrl-C
+        # only stops the loop -- it cannot half-apply anything.
+        print("\ninterrupted -- decisions already made are saved.", file=out)
+
+    print("", file=out)
+    _print_summary(outcome, out)
+    return outcome
+
+
+def _walk(
+    store: VaultStore,
+    queue: Sequence[MemoryEntry],
+    stream: Iterator[str],
+    out: TextIO,
+    err: TextIO,
+    state: ReviewState,
+    outcome: Outcome,
+) -> None:
+    """Ask about each entry in turn. Returns when the queue ends or the user quits."""
     for position, entry in enumerate(queue, start=1):
         # Re-read so a category edit applies to the version on disk, not to the
         # snapshot the scan produced (save() derives the path from status).
@@ -277,8 +299,7 @@ def run(
             key = ask(stream, out)
             if key is None or key == "q":
                 print("\nstopped. the next run resumes at the first undecided entry.", file=out)
-                _print_summary(outcome, out)
-                return outcome
+                return
 
             if key not in KEYS:
                 print(f"unknown key {key!r}; use: {HELP_LINE}", file=out)
@@ -329,10 +350,6 @@ def run(
                 outcome.rejected.append(entry.id)
             print(f"{status}  {entry.id}", file=out)
             break
-
-    print("", file=out)
-    _print_summary(outcome, out)
-    return outcome
 
 
 def _print_summary(outcome: Outcome, out: TextIO) -> None:

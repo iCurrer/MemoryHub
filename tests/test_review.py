@@ -74,9 +74,8 @@ class ReviewTests(unittest.TestCase):
     # ------------------------------------------------------------------ queue
 
     def test_skipped_entries_move_to_the_back_not_out(self) -> None:
-        first = self.make("first")
-        second = self.make("second")
-        second.created_at = first.created_at
+        first = self.make("first", created_at="2026-01-01T00:00:00+08:00")
+        second = self.make("second", created_at="2026-01-02T00:00:00+08:00")
         state = review.ReviewState(self.state_path)
         state.mark_skipped(self.vault, first.id)
 
@@ -116,8 +115,10 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(outcome.rejected, [entry.id])
 
     def test_quit_leaves_the_rest_pending(self) -> None:
-        first = self.make("one")
-        second = self.make("two")
+        # Explicit timestamps: same-second entries tie on created_at and fall
+        # back to id order, which is random per run.
+        first = self.make("one", created_at="2026-01-01T00:00:00+08:00")
+        second = self.make("two", created_at="2026-01-02T00:00:00+08:00")
         outcome = self.run_review(["a\n", "q\n"])
         self.assertEqual(self.status_of(first), "approved")
         self.assertEqual(self.status_of(second), "pending")
@@ -135,6 +136,20 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(self.status_of(entry), "approved")
         self.assertEqual(outcome.approved, [entry.id])
         self.assertIn("unknown key", self.out.getvalue())
+
+    def test_ctrl_c_keeps_what_was_already_decided(self) -> None:
+        first = self.make("one", created_at="2026-01-01T00:00:00+08:00")
+        second = self.make("two", created_at="2026-01-02T00:00:00+08:00")
+
+        def keys():
+            yield "a\n"
+            raise KeyboardInterrupt
+
+        outcome = self.run_review(keys())
+        self.assertEqual(self.status_of(first), "approved")
+        self.assertEqual(self.status_of(second), "pending")
+        self.assertEqual(outcome.approved, [first.id])
+        self.assertIn("interrupted", self.out.getvalue())
 
     # -------------------------------------------------------------- skipping
 

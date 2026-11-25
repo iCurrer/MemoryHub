@@ -8,7 +8,7 @@
 
 ## 1. 一句话现状
 
-**三个来源（WorkBuddy / Claude Code / Codex）→ 整理 → 审核 → vault → CLI / MCP 检索，全链路已通。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**235 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：语义去重与冲突检测（P3-04/05）、P3-00 fallback 显式化、回写分发、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+**三个来源（WorkBuddy / Claude Code / Codex）→ 整理 → 审核 → vault → CLI / MCP 检索，全链路已通。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**236 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：语义去重与冲突检测（P3-04/05）、P3-00 fallback 显式化、回写分发、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
 
 **AI 整理怎么工作（ADR-016）**：`Adapter.discover()` 仍是算法（找文件是确定的）；`read()` 在 `--ai` 模式改走模型（拆分 + 分类是语义的）；模型返回的每一条必须带从原文逐字复制的 `quote`，归一化后定位不到就标记待核实。**这条 quote 校验是唯一能自动化的防幻觉手段，不要删。**
 
@@ -75,7 +75,7 @@
 | `tests/test_backup.py` | 8 个用例 | 本地提交 / 远端推送敏感闸门 / .gitignore |
 | `tests/test_safety.py` | 6 个用例 | 凭证与 PII 分级 |
 | `tests/test_ai.py` | 27 个用例 | 假传输桩：提示词契约、JSON 提取、逐条校验、quote 定位、配置读取 |
-| `tests/test_review.py` | 22 个用例 | 队列顺序、跳过持久化、断点续审、改分类、blocked 拦截、EOF、非 TTY 拒绝 |
+| `tests/test_review.py` | 23 个用例 | 队列顺序、跳过持久化、断点续审、改分类、blocked 拦截、EOF、Ctrl-C、非 TTY 拒绝 |
 | `tests/test_boundary.py` | 15 个用例 | 两仓隔离：vault 在 git 树内即拒、pre-push 钩子、远端 URL 判定 |
 | `tests/test_classify.py` | 15 个用例 | 加权规则、决定性权重、平票优先级 |
 | `tests/test_migrate.py` | 5 个用例 | 长条目切分三级回退、空标题剔除 |
@@ -103,7 +103,7 @@ cd /d/project/MemoryHub
 pip install pyyaml mcp      # 运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 Ran 235；缺 mcp 时 1 error（test_mcp 导入），234 通过
+python -m unittest discover -s tests -v          # 期望 Ran 236；缺 mcp 时 1 error（test_mcp 导入），235 通过
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
