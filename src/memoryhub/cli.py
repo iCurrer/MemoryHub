@@ -11,7 +11,16 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import __version__, access, boundary, config, conflicts, review, sync
+from . import (
+    __version__,
+    access,
+    boundary,
+    config,
+    conflicts,
+    review,
+    summary,
+    sync,
+)
 from .adapters import ADAPTERS, build
 from .ai import (
     DEFAULT_MAX_PAIRS,
@@ -1183,6 +1192,93 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _confirm(prompt: str) -> bool:
+    try:
+        return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def cmd_summarize(args: argparse.Namespace) -> int:
+    """One scannable sentence per memory (derived; never touches the vault).
+
+    Without this the page titles each card with the entry's first line, which
+    for a section-per-file dossier is "二、经历与求职背景" -- true, and useless
+    as a thing to scan. The sentence is written to ``database/summaries.json``,
+    keyed by entry id and stamped with a hash of the body it described; nothing
+    in the vault changes, and deleting the file only costs a re-run.
+    """
+    store = _store(args)
+    data = summary.load(store.root)
+    entries, _ = store.scan()
+    visible = [e for e in entries if e.status in ("pending", "approved")]
+    if args.all:
+        targets = visible
+    else:
+        targets = summary.pending(visible, data)
+    targets = sorted(targets, key=lambda e: (e.status != "pending", e.created_at, e.id))
+    if args.limit:
+        targets = targets[: args.limit]
+
+    before = summary.stats(visible, data)
+    print(
+        f"记忆 {before['total']} 条，已有概括 {before['covered']} 条，"
+        f"待生成 {len(targets)} 条"
+    )
+    if not targets:
+        print("没有要生成的条目。")
+        return 0
+
+    cfg = AIConfig.from_config()
+    if cfg is None:
+        print(
+            "error: 没有配置 AI。在 ~/.memoryhub/config.toml 里加：\n"
+            "  [ai]\n  base_url = \"https://api.deepseek.com/v1\"\n  model = \"deepseek-chat\"",
+            file=sys.stderr,
+        )
+        return 1
+    if args.dry_run:
+        for entry in targets[:20]:
+            print(f"would summarize  {entry.id}  {len(entry.body)} 字  "
+                  + " ".join(entry.body.split())[:40])
+        if len(targets) > 20:
+            print(f"... 其余 {len(targets) - 20} 条省略")
+        print("\ndry run：没有调用模型")
+        return 0
+    if not args.yes and not _confirm(f"将调用 {len(targets)} 次 {cfg.model}，继续？"):
+        return 1
+
+    provider = Provider(cfg)
+
+    def progress(done: int, count: int, entry) -> None:
+        sys.stdout.write(".")
+        if done % 40 == 0 or done == count:
+            sys.stdout.write(f"  {done}/{count}\n")
+        sys.stdout.flush()
+
+    try:
+        merged, failures = summary.generate(targets, data, provider, on_progress=progress)
+    except AIError as exc:
+        print(f"\nerror: {exc}", file=sys.stderr)
+        return 1
+    print()
+    summary.save(store.root, merged)
+    after = summary.stats(visible, merged)
+    print(
+        f"写入 {summary.path_for(store.root)}："
+        f"{after['covered']}/{after['total']} 条有概括"
+    )
+    if failures:
+        print(
+            f"  {len(failures)} 条没有可用概括（模型拒答，或它给的引文在原文里找不到）。"
+            "这些卡片会退回显示首行：",
+            file=sys.stderr,
+        )
+        for entry_id in failures[:10]:
+            print(f"    {entry_id}", file=sys.stderr)
+    return 0
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Summarise what changed in the vault, from its own git history (P4-03)."""
     store = _store(args)
@@ -1769,6 +1865,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_access.add_argument("--limit", type=int, default=10, help="rows in the tally (default 10)")
     p_access.set_defaults(func=cmd_access)
 
+    p_sum = sub.add_parser(
+        "summarize",
+        parents=[vault_arg],
+        help="write one scannable sentence per memory (derived, never into the vault)",
+    )
+    p_sum.add_argument("--limit", type=int, default=200, help="最多生成多少条（默认 200）")
+    p_sum.add_argument(
+        "--all",
+        action="store_true",
+        help="连已有概括的一起重做（默认只补缺的和正文改过的）",
+    )
+    p_sum.add_argument("--dry-run", action="store_true", help="只列清单，不调用模型")
+    p_sum.add_argument("--yes", action="store_true", help="不问确认")
+    p_sum.set_defaults(func=cmd_summarize)
+
     p_sync = sub.add_parser(
         "sync",
         parents=[vault_arg],
@@ -1940,7 +2051,18 @@ def build_parser() -> argparse.ArgumentParser:
     #: complicated -- see docs/04-classify-audit.md for what the code actually is.
     #: ``_choices_actions`` is the table argparse renders for subcommands; entries
     #: are removed in place (not help=SUPPRESS, which prints the literal word).
-    mainline = {"init", "import", "scan", "approve", "review", "sync", "serve", "mcp", "doctor"}
+    mainline = {
+        "init",
+        "import",
+        "scan",
+        "approve",
+        "review",
+        "sync",
+        "serve",
+        "summarize",
+        "mcp",
+        "doctor",
+    }
     sub._choices_actions[:] = [
         action for action in sub._choices_actions if action.dest in mainline
     ]

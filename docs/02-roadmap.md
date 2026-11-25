@@ -377,6 +377,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 | P5-04 | `memoryhub backup`：本地 commit + 可选远端 | ✅ 完成 |
 | P5-06 | `memoryhub sync`：把库投影回各 AI 的受管区块 | ✅ 完成（ADR-019） |
 | P5-07 | 读取日志 + 三个上下文捷径工具 | ✅ 完成（ADR-021） |
+| P6-03a | 卡片流重做 + `summarize` 概括层 | ✅ 完成（ADR-022） |
 
 **P5-07 实际落地（2026-11-25，ADR-021）**：`logs/access.jsonl` 记录每次 MCP 读调用，
 `memoryhub access [--entry ID]` 读它；标签来自 `--label`（写进客户端配置），不读 MCP 自报的
@@ -434,7 +435,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 |---|---|---|
 | P6-01 | PyInstaller 打包（Windows x64） | 阶段 5 完成 |
 | P6-02 | 开机常驻 + 系统托盘 | 打包可用 |
-| P6-03 | 基础 Web UI（只读总览 + 待审列表） | ✅ 提前落地，见下方说明与 ADR-020 |
+| P6-03 | 本机卡片流（待办 / 已记 + 一句话概括） | ✅ 提前落地，见下方说明与 ADR-020 |
 
 **P6-03 提前落地的原因（2026-11-25，ADR-020）**：原来写的门禁是「作者自用满一个月且仍想打开」，这是一条循环论证——没有低摩擦入口就不会长出「仍想打开」的习惯，门禁永远不会满足。真正的信号是**积压是否在增长**：P3-05 当天产出 24 条提案，全部带可定位证据，然后一条也没人处理，因为读它等于 `cat` 一堆 JSON。
 

@@ -7,153 +7,125 @@
 <title>MemoryHub</title>
 <style>
   :root {
-    --bg: #0f1216;
-    --panel: #161b22;
-    --panel-2: #1c232c;
-    --line: #2a323d;
-    --fg: #d7dee8;
-    --dim: #7d8794;
-    --faint: #4d5663;
+    --bg: #0d1013;
+    --card: #171b20;
+    --card-2: #1d2228;
+    --line: #262d35;
+    --fg: #e6ebf1;
+    --dim: #8b949e;
+    --faint: #565f6a;
     --ok: #3fb950;
     --no: #f85149;
     --warn: #d29922;
     --accent: #58a6ff;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
+  html, body { margin: 0; }
   body {
     background: var(--bg); color: var(--fg);
-    font: 13px/1.55 ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans Mono CJK SC", monospace;
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  a { color: var(--accent); }
+  /* One column, phone-width on purpose: a memory card is a thing you read one
+     at a time, not a dashboard you scan in a grid. */
+  .wrap { max-width: 680px; margin: 0 auto; padding: 0 16px 80px; }
+
   header {
-    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
-    padding: 12px 20px; border-bottom: 1px solid var(--line); background: #0b0e12;
     position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px 10px; background: linear-gradient(var(--bg) 70%, rgba(13,16,19,0));
   }
-  header h1 { font-size: 13px; margin: 0; letter-spacing: .18em; font-weight: 600; }
-  header .vault { color: var(--faint); font-size: 12px; }
+  header .title { font-size: 15px; font-weight: 600; letter-spacing: .04em; }
   header .spacer { flex: 1; }
   header button {
     background: transparent; border: 1px solid var(--line); color: var(--dim);
-    padding: 4px 10px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px;
+    padding: 5px 11px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12px;
   }
   header button:hover { color: var(--fg); border-color: var(--faint); }
 
-  main { padding: 18px 20px 60px; max-width: 1080px; margin: 0 auto; }
+  .facts { color: var(--faint); font-size: 12px; padding: 0 16px 10px; line-height: 1.7; }
+  .facts b { color: var(--dim); font-weight: 600; }
+  .facts .path { overflow-wrap: anywhere; }
 
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 20px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
-  .card .n { font-size: 22px; line-height: 1.15; font-variant-numeric: tabular-nums; }
-  .card .k { color: var(--dim); font-size: 11px; letter-spacing: .08em; margin-top: 2px; }
-  .card .sub { color: var(--faint); font-size: 11px; margin-top: 4px; }
-  .card.hot .n { color: var(--warn); }
-
-  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
-  .tabs button {
-    background: transparent; border: 0; border-bottom: 2px solid transparent;
-    color: var(--dim); padding: 8px 13px; cursor: pointer; font: inherit;
+  .pills { display: flex; gap: 8px; padding: 4px 16px 14px; flex-wrap: wrap; }
+  .pill {
+    background: var(--card-2); border: 1px solid var(--line); color: var(--dim);
+    padding: 6px 14px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 13px;
   }
-  .tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
-  .tabs .count { color: var(--faint); margin-left: 6px; }
+  .pill[aria-selected="true"] { color: #08131f; background: #a8c7e8; border-color: #a8c7e8; font-weight: 600; }
+  .pill .n { opacity: .7; margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .pill.sub { font-size: 12px; padding: 4px 11px; }
 
-  .tip { color: var(--dim); font-size: 12px; margin: 0 0 12px; }
-  .empty { color: var(--faint); padding: 28px 4px; }
-  .accessline { color: var(--faint); font-size: 11px; padding: 0 2px 6px; letter-spacing: 0.2px; }
-  .accessline b { color: var(--dim); font-weight: 600; }
-
-  .item {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-    padding: 12px 14px; margin-bottom: 10px;
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 16px 12px; margin-bottom: 12px;
   }
-  .item.blocked { border-color: #5c3b14; }
-  .item .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 11px; color: var(--faint); margin-bottom: 8px; }
-  .item .body { overflow-wrap: anywhere; }
-  .item .acts { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
-  .item .acts .id { color: var(--faint); font-size: 11px; margin-left: auto; }
+  .card.todo { border-color: #2f3946; }
+  .card.blocked { border-color: #4a3417; }
 
-  /* One scannable line per entry. Extracted from the body, never generated --
-     see web.headline() for why that matters. */
-  .headline {
-    font-size: 14px; line-height: 1.5; color: #eef3f9; margin: 0 0 8px;
-    overflow-wrap: anywhere;
+  .meta { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; color: var(--faint); font-size: 11.5px; margin-bottom: 9px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #232a33; border-radius: 6px; padding: 2px 7px; color: #b9c4d0;
   }
-  .body .l-h { color: #cfd8e3; font-weight: 600; margin: 10px 0 4px; }
-  .body .l-h:first-child { margin-top: 0; }
-  .body .l-li { padding-left: 15px; position: relative; color: var(--fg); }
-  .body .l-li::before { content: "·"; position: absolute; left: 4px; color: var(--faint); }
-  .body .l-p { color: var(--fg); }
+  .chip.cat { background: #24313d; color: #a9c8e4; }
+  .chip.warn { background: #3a2c10; color: #e3b341; }
+  .chip.bad { background: #3a1a18; color: #ff948b; }
+  .chip.ok { background: #17301c; color: #6fd07d; }
+
+  .line { font-size: 15.5px; line-height: 1.55; color: #f0f4f8; margin: 0; overflow-wrap: anywhere; }
+  .line .mark { color: var(--faint); font-size: 11px; margin-left: 6px; }
+  .body { margin-top: 10px; }
+  .body[hidden] { display: none; }
+  .body .l-h { color: #cfd8e3; font-weight: 600; margin: 10px 0 4px; font-size: 13.5px; }
+  .body .l-li { padding-left: 14px; position: relative; color: #c3ccd6; font-size: 13px; }
+  .body .l-li::before { content: "·"; position: absolute; left: 3px; color: var(--faint); }
+  .body .l-p { color: #c3ccd6; font-size: 13px; }
   .body .l-gap { height: 6px; }
-  .more {
-    background: transparent; border: 0; color: var(--accent); cursor: pointer;
-    font: inherit; font-size: 12px; padding: 4px 0 0; opacity: .85;
+  details.raw { margin-top: 10px; }
+  details.raw > summary {
+    display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer;
+    color: var(--faint); font-size: 12px;
   }
-  .more:hover { opacity: 1; text-decoration: underline; }
+  details.raw > summary::-webkit-details-marker { display: none; }
+  details.raw > summary::before { content: "▸"; font-size: 10px; }
+  details.raw[open] > summary::before { content: "▾"; }
+  details.raw > summary:hover { color: var(--dim); }
 
-  .badge { border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; color: var(--dim); }
-  .badge.cat { color: var(--fg); border-color: var(--faint); }
-  .badge.blocked { color: var(--warn); border-color: #5c3b14; }
-  .badge.danger { color: var(--no); border-color: #5c1e1c; }
-  .badge.ok { color: var(--ok); border-color: #1f4025; }
-
+  .acts { display: flex; gap: 8px; margin-top: 14px; align-items: center; flex-wrap: wrap; }
+  .acts .gap { flex: 1; }
+  .acts .id { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
   button.act {
-    font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 4px; cursor: pointer;
-    background: var(--panel-2); color: var(--fg); border: 1px solid var(--line);
+    font: inherit; font-size: 13px; padding: 8px 18px; border-radius: 10px; cursor: pointer;
+    background: var(--card-2); color: var(--fg); border: 1px solid var(--line);
   }
-  button.act:hover { border-color: var(--faint); }
-  button.act:disabled { opacity: .4; cursor: not-allowed; }
-  button.act.primary { color: #05130a; background: var(--ok); border-color: var(--ok); }
-  button.act.keep:hover:not(:disabled) { color: var(--ok); border-color: var(--ok); }
-  button.act.danger { color: var(--no); }
-  button.act.danger:hover { border-color: var(--no); }
+  button.act:hover:not(:disabled) { border-color: var(--faint); }
+  button.act:disabled { opacity: .38; cursor: not-allowed; }
+  button.act.yes { color: #c8f0cf; border-color: #2b4a31; }
+  button.act.yes:hover:not(:disabled) { background: #1b2b1e; border-color: var(--ok); }
+  button.act.no { color: #ffb0a9; border-color: #4a2622; }
+  button.act.no:hover:not(:disabled) { background: #2b1a18; border-color: var(--no); }
+  /* The armed state *is* the confirmation. A native dialog would be simpler to
+     write and has already failed once: inside a sandboxed preview frame it
+     returns false without showing anything, so the button looked dead. */
+  button.act.armed { background: #2b1a18; border-color: var(--no); color: #ffd7d2; }
 
-  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  @media (max-width: 760px) { .pair { grid-template-columns: 1fr; } }
-  .side { background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 10px 12px; }
-  .side.chosen { border-color: var(--ok); }
-  .side .hint { color: var(--faint); font-size: 11px; margin-bottom: 6px; }
-  .reason { color: var(--dim); border-left: 2px solid var(--line); padding: 2px 0 2px 10px; margin: 10px 0; font-size: 12px; }
-  /* The verdict rests on two quoted spans, not on two whole entries. These get
-     shown first and the entries folded behind them -- otherwise a 44-character
-     sentence and a 382-character chapter look like nothing alike. */
-  .basis { margin-bottom: 10px; }
-  .basis .lbl { color: var(--faint); font-size: 11px; letter-spacing: .06em; margin: 0 0 5px; }
-  .quotes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  @media (max-width: 760px) { .quotes { grid-template-columns: 1fr; } }
-  .quote {
-    background: #12181f; border: 1px solid #24303c; border-left: 2px solid var(--accent);
-    border-radius: 4px; padding: 7px 10px; font-size: 12.5px; color: #e6edf5;
-    overflow-wrap: anywhere;
-  }
-  .quote .who { color: var(--faint); font-size: 10.5px; display: block; margin-bottom: 3px; }
-  details.entries { margin-top: 10px; }
-  details.entries > summary {
-    cursor: pointer; color: var(--dim); font-size: 12px; padding: 3px 0;
-    /* display:flex drops the native marker in every engine; list-style alone
-       did not, and the ::before never showed up. */
-    display: flex; align-items: center; gap: 7px; list-style: none;
-  }
-  details.entries > summary::-webkit-details-marker { display: none; }
-  details.entries > summary::before {
-    content: "▸"; color: var(--faint); font-size: 10px; line-height: 1;
-  }
-  details.entries[open] > summary::before { content: "▾"; }
-  details.entries > summary:hover { color: var(--fg); }
-  .warn {
-    color: #e3b341; background: #2b2008; border: 1px solid #5c3b14; border-radius: 4px;
-    padding: 6px 9px; margin-top: 8px; font-size: 12px;
-  }
+  .note { color: var(--dim); font-size: 12.5px; border-left: 2px solid var(--line); padding: 2px 0 2px 10px; margin: 10px 0 0; }
+  .quotes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 2px 0 4px; }
+  @media (max-width: 620px) { .quotes { grid-template-columns: 1fr; } }
+  .q { background: #12161a; border: 1px solid #202832; border-left: 2px solid var(--accent); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #dde5ee; overflow-wrap: anywhere; }
+  .q .who { display: block; color: var(--faint); font-size: 10.5px; margin-bottom: 3px; }
+  .warn { color: #cf9d2f; font-size: 12px; margin-top: 8px; line-height: 1.6; }
+  .warn::before { content: "⚠ "; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--dim); font-weight: 500; font-size: 11px; letter-spacing: .06em; }
-  td.mono { overflow-wrap: anywhere; color: var(--dim); }
+  .empty { color: var(--faint); text-align: center; padding: 44px 10px; font-size: 13px; line-height: 1.9; }
+  .empty code { background: var(--card-2); padding: 1px 6px; border-radius: 5px; color: var(--dim); }
 
   #toast {
-    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px);
-    background: #1f2630; border: 1px solid var(--line); color: var(--fg);
-    padding: 8px 14px; border-radius: 5px; opacity: 0; pointer-events: none;
-    transition: opacity .18s, transform .18s; max-width: 70vw;
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(16px);
+    background: #232a33; border: 1px solid var(--line); color: var(--fg); font-size: 13px;
+    padding: 9px 16px; border-radius: 10px; opacity: 0; pointer-events: none;
+    transition: opacity .18s, transform .18s; max-width: 76vw;
   }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #toast.bad { border-color: #5c1e1c; color: #ffb4ab; }
@@ -161,55 +133,37 @@
 </head>
 <body>
 <header>
-  <h1>MEMORYHUB</h1>
-  <span class="vault" id="vault"></span>
+  <span class="title">记忆</span>
   <span class="spacer"></span>
   <button id="refresh" title="重新读一遍库">刷新</button>
 </header>
 
-<main>
-  <section class="cards" id="cards"></section>
-  <div class="accessline" id="accessline"></div>
+<div class="facts" id="facts"></div>
 
-  <nav class="tabs" role="tablist">
-    <button role="tab" data-tab="pending" aria-selected="true">待审<span class="count" id="c-pending"></span></button>
-    <button role="tab" data-tab="proposals" aria-selected="false">冲突提案<span class="count" id="c-proposals"></span></button>
-    <button role="tab" data-tab="sync" aria-selected="false">回写</button>
-  </nav>
+<nav class="pills" id="pills">
+  <button class="pill" data-view="todo" aria-selected="true">待办<span class="n" id="n-todo"></span></button>
+  <button class="pill" data-view="all" aria-selected="false">已记<span class="n" id="n-all"></span></button>
+</nav>
 
-  <section id="panel-pending">
-    <p class="tip">批准 = 从今往后每个接上来的 AI 都能读到。拒绝不会删除文件，只是不再返回。键盘 <kbd>a</kbd> 批准 / <kbd>r</kbd> 拒绝。</p>
-    <div id="pending"></div>
-  </section>
+<div class="pills" id="cats" hidden></div>
 
-  <section id="panel-proposals" hidden>
-    <p class="tip">模型只出提案。点任意一侧就是「保留它、让另一条关闭有效期」——取代链只有一个写入口，成环会被拒。</p>
-    <div id="proposals"></div>
-  </section>
-
-  <section id="panel-sync" hidden>
-    <p class="tip">写入是命令行动作（<code>memoryhub sync --write</code>）：它会改三个工具启动时读的文件，不放进浏览器按钮里。</p>
-    <div id="synctable"></div>
-  </section>
-</main>
-
+<div class="wrap" id="feed"></div>
 <div id="toast"></div>
 
 <script>
-// The token is rendered into the meta tag by the server when the request proves
-// it has one; otherwise it comes from the URL or from this tab. Never in
-// localStorage -- sessionStorage dies with the tab.
+// The token comes from the meta tag the server fills in; the URL parameter is a
+// fallback for a page opened from a printed address. Never localStorage -- a
+// token that survives the tab outlives the process it belongs to.
 const metaEl = document.querySelector('meta[name="mh-token"]');
 const rendered = metaEl ? metaEl.content : "";
 let TOKEN = rendered && !rendered.startsWith("__") ? rendered : "";
 if (!TOKEN) TOKEN = new URLSearchParams(location.search).get("t") || sessionStorage.getItem("mh-token") || "";
 if (TOKEN) sessionStorage.setItem("mh-token", TOKEN);
-// The ?t= is left in the address bar on purpose: stripping it looked tidy and
-// turned every reload into a 401, because the URL was the only copy the server
-// could check. The token is per-run, so a URL in history is a URL to nothing.
+// ?t= stays in the address bar: stripping it looked tidy and turned every
+// reload into a 401, because that URL was the only copy the server could check.
 
 const CAT = { profile: "身份", decision: "决定", preference: "偏好", project: "项目", knowledge: "知识" };
-let state = { overview: null, pending: [], proposals: [], cursor: 0 };
+let state = { overview: null, pending: [], proposals: [], entries: [], view: "todo", cat: "", cursor: 0 };
 
 function el(tag, attrs, ...kids) {
   const node = document.createElement(tag);
@@ -245,16 +199,41 @@ function toast(msg, bad) {
   box.textContent = msg;
   box.className = "show" + (bad ? " bad" : "");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { box.className = ""; }, bad ? 6000 : 2600);
+  toastTimer = setTimeout(() => { box.className = ""; }, bad ? 6500 : 2400);
 }
 
-function badge(text, cls) { return el("span", { class: "badge" + (cls ? " " + cls : "") }, text); }
+function chip(text, cls) { return el("span", { class: "chip" + (cls ? " " + cls : "") }, text); }
 
-// ---------------------------------------------------------------- entry body
+// ------------------------------------------------------------- two-step action
 
-//: Lines shown before the "expand" control. Four fits one screenful of cards
-//: without any single entry dominating it.
-const BODY_LINES = 4;
+//: A destructive click needs one confirming click, not a dialog. Native dialogs
+//: are a dead end in this page's preview frame -- they return false silently,
+//: which reads to the user as "the button does nothing".
+const ARMED_MS = 5000;
+
+function twoStep(button, label, armedLabel, run) {
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    if (button.dataset.armed !== "1") {
+      button.dataset.armed = "1";
+      button.classList.add("armed");
+      button.textContent = armedLabel;
+      button._timer = setTimeout(() => disarm(button, label), ARMED_MS);
+      return;
+    }
+    disarm(button, label);
+    run();
+  });
+}
+
+function disarm(button, label) {
+  clearTimeout(button._timer);
+  button.dataset.armed = "0";
+  button.classList.remove("armed");
+  button.textContent = label;
+}
+
+// ------------------------------------------------------------------ rendering
 
 function lineNode(line) {
   const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
@@ -265,278 +244,251 @@ function lineNode(line) {
   return el("div", { class: "l-p" }, line.replace(/\*\*/g, ""));
 }
 
-/**
- * The body, structured by its own lines, folded to BODY_LINES.
- *
- * Structure comes from the entry, not from a renderer guess: an entry cut out
- * of a `##` section keeps its heading, a list keeps its bullets. That alone is
- * most of the difference between "a wall of text" and "something organised" --
- * no rewriting of the content, no summary, nothing that could be wrong.
- */
-function renderBody(entry) {
-  const all = entry.body.split("\n");
+function rawBody(entry) {
   const skip = (entry.headline && entry.headline.skip) || 0;
-  const nodes = all.slice(skip).map(lineNode);
   const wrap = el("div", { class: "body" });
-  const hiddenCount = nodes.length - BODY_LINES;
-  nodes.forEach((node, i) => { if (i >= BODY_LINES) node.hidden = true; wrap.append(node); });
-  if (hiddenCount > 0) {
-    const label = "展开剩余 " + hiddenCount + " 行（共 " + entry.chars + " 字）";
-    const button = el("button", { class: "more" }, label);
-    button.addEventListener("click", () => {
-      const folded = button.dataset.open !== "1";
-      nodes.forEach((node, i) => { if (i >= BODY_LINES) node.hidden = !folded; });
-      button.dataset.open = folded ? "1" : "0";
-      button.textContent = folded ? "收起" : label;
-    });
-    wrap.append(button);
-  }
+  for (const line of entry.body.split("\n").slice(skip)) wrap.append(lineNode(line));
   return wrap;
 }
 
-function entryHead(entry) {
-  if (!entry.headline || !entry.headline.text) return null;
-  // Under 60 characters the body *is* the headline; repeating it looks broken.
-  if (entry.chars <= 60) return null;
-  return el("div", { class: "headline" }, entry.headline.text);
+/** The sentence at the top of a card.
+ *
+ * Prefers the model's one-liner (``summary``) when the user has run
+ * ``memoryhub summarize``; otherwise the entry's own most factual first line.
+ * Both are labelled differently on screen, because one of them is a paraphrase
+ * and the other is a quote -- the page must not let them look the same.
+ */
+function titleNode(entry) {
+  const derived = entry.summary;
+  const text = derived || (entry.headline && entry.headline.text) || entry.body.slice(0, 44);
+  return el("p", { class: "line" }, text,
+    derived ? el("span", { class: "mark", title: "模型按原文概括的一句话，原文见下" }, "概括") : null);
 }
 
+function entryCard(entry, opts) {
+  const o = opts || {};
+  const blocked = entry.trust === "blocked";
+  const meta = el("div", { class: "meta" },
+    chip(CAT[entry.category] || entry.category, "cat"),
+    entry.headline && entry.headline.section ? chip(entry.headline.section) : null,
+    entry.source_adapter ? chip(entry.source_adapter) : null,
+    entry.sensitivity !== "normal" ? chip("敏感：" + entry.sensitivity, "bad") : null,
+    blocked ? chip("blocked", "warn") : null,
+    el("span", {}, (entry.created_at || "").slice(0, 10)));
 
-function renderCards(o) {
-  const cards = document.getElementById("cards");
-  const pending = (o.by_status.pending || 0);
-  const blocked = state.pending.filter(e => e.trust === "blocked").length;
-  cards.replaceChildren(
-    el("div", { class: "card" + (pending ? " hot" : "") },
-      el("div", { class: "n" }, pending),
-      el("div", { class: "k" }, "待审"),
-      el("div", { class: "sub" }, blocked ? blocked + " 条 blocked，不能直接批" : "队列已清空")),
-    el("div", { class: "card" + (o.conflicts.open ? " hot" : "") },
-      el("div", { class: "n" }, o.conflicts.open),
-      el("div", { class: "k" }, "冲突提案"),
-      el("div", { class: "sub" }, Object.entries(o.conflicts.by_relation).map(([k, v]) => k + " " + v).join(" / ") || "无")),
-    el("div", { class: "card" },
-      el("div", { class: "n" }, o.sync.live),
-      el("div", { class: "k" }, "有效记忆"),
-      el("div", { class: "sub" }, "回写区块 " + o.sync.block_chars.toLocaleString() + " 字")),
-    el("div", { class: "card" },
-      el("div", { class: "n" }, o.total),
-      el("div", { class: "k" }, "库里共"),
-      el("div", { class: "sub" }, Object.entries(o.by_status).map(([k, v]) => k + " " + v).join(" / ")))
-  );
-  document.getElementById("vault").textContent = o.vault;
-  const a = o.access || { calls: 0, labels: [], read_entries: 0, last_at: "" };
-  document.getElementById("accessline").replaceChildren(
-    a.calls
-      ? el("span", {},
-          "读取日志 ", el("b", {}, String(a.calls)), " 次 · ",
-          el("b", {}, String(a.read_entries)), " 条被读过 · ",
-          (a.labels.length ? a.labels.join(", ") : "未标注客户端"),
-          " · 最近 ", (a.last_at || "").slice(0, 16).replace("T", " "))
-      : el("span", {}, "还没有读取记录。给每个客户端的 mcp 配置加 --label，这里就能分清是谁在读。"));
-  document.getElementById("c-pending").textContent = pending ? String(pending) : "";
-  document.getElementById("c-proposals").textContent = o.conflicts.open ? String(o.conflicts.open) : "";
-}
+  const card = el("article", { class: "card" + (o.todo ? " todo" : "") + (blocked ? " blocked" : "") }, meta, titleNode(entry));
 
-function renderPending() {
-  const host = document.getElementById("pending");
-  if (!state.pending.length) {
-    host.replaceChildren(el("div", { class: "empty" }, "没有待审条目。"));
-    return;
+  // The original text is one tap away and always available: the summary is a
+  // convenience, the body is the evidence.
+  if (entry.chars > 30 || entry.summary) {
+    card.append(el("details", { class: "raw" },
+      el("summary", {}, "原文 · " + entry.chars + " 字"),
+      rawBody(entry)));
   }
-  host.replaceChildren(...state.pending.map((e, i) => {
-    const blocked = e.trust === "blocked";
-    const hot = i === state.cursor;
-    return el("article", { class: "item" + (blocked ? " blocked" : "") },
-      el("div", { class: "meta" },
-        badge(CAT[e.category] || e.category, "cat"),
-        badge(e.source_adapter || "unknown"),
-        e.sensitivity !== "normal" ? badge("sensitivity=" + e.sensitivity, "danger") : null,
-        blocked ? badge("blocked", "blocked") : null,
-        el("span", {}, e.chars + " 字 · " + (e.created_at || "").slice(0, 16).replace("T", " "))),
-      entryHead(e),
-      renderBody(e),
-      el("div", { class: "acts" },
-        el("button", {
-          class: "act primary", disabled: blocked,
-          title: blocked ? "blocked 不能直接批" : "进入检索与回写",
-          onclick: () => decide(e, "approve")
-        }, "批准"),
-        el("button", { class: "act danger", onclick: () => decide(e, "reject") }, "拒绝"),
-        el("select", {
-          class: "act",
-          onchange: (ev) => decide(e, "category", ev.target.value)
-        }, el("option", { value: "" }, "改分类…"),
-           ...Object.entries(CAT).filter(([k]) => k !== e.category)
-             .map(([k, v]) => el("option", { value: k }, v))),
-        el("span", { class: "id" }, e.id)));
-  }));
+
+  if (o.todo) {
+    const yes = el("button", { class: "act yes", disabled: blocked,
+      title: blocked ? "blocked 不能直接批：先降 sensitivity" : "进入检索与回写" });
+    twoStep(yes, "留着", "确定留着？", () => decide(entry, "approve"));
+    const no = el("button", { class: "act no" });
+    twoStep(no, "不要", "确定不要？", () => decide(entry, "reject"));
+    card.append(el("div", { class: "acts" }, yes, no, el("span", { class: "gap" }),
+      el("select", { class: "act", onchange: (ev) => decide(entry, "category", ev.target.value) },
+        el("option", { value: "" }, "改分类"),
+        ...Object.entries(CAT).filter(([k]) => k !== entry.category).map(([k, v]) => el("option", { value: k }, v)))));
+  }
+  return card;
 }
 
-function renderProposals() {
-  const host = document.getElementById("proposals");
-  if (!state.proposals.length) {
-    host.replaceChildren(el("div", { class: "empty" }, "没有未处理的提案。"));
-    return;
+function proposalCard(p) {
+  const contested = p.relation === "contradicts";
+  const claims = (p.claims || []).filter(c => c.quote_left || c.quote_right);
+  const card = el("article", { class: "card todo" },
+    el("div", { class: "meta" },
+      chip(contested ? "两条说法冲突" : "两条在说同一件事", contested ? "warn" : "ok"),
+      el("span", {}, (p.detected_at || "").slice(0, 10))));
+
+  // The evidence, not the entries: 44 characters against 382 characters is
+  // unreadable as a pair of documents and obvious as a pair of quoted spans.
+  if (claims.length) {
+    for (const c of claims.slice(0, 2)) {
+      card.append(el("div", { class: "quotes" },
+        el("div", { class: "q" }, el("span", { class: "who" }, "A"), c.quote_left || "—"),
+        el("div", { class: "q" }, el("span", { class: "who" }, "B"), c.quote_right || "—")));
+    }
+  } else {
+    card.append(el("div", { class: "warn" }, "这条提案没有引文证据，只剩模型的结论。展开原文再看。"));
   }
-  host.replaceChildren(...state.proposals.map((p) => {
-    const contested = p.relation === "contradicts";
-    const claims = (p.claims || []).filter(c => c.quote_left || c.quote_right);
+  if (p.reason) card.append(el("div", { class: "note" }, p.reason));
 
-    // The evidence first. A verdict between a 44-character sentence and a
-    // 382-character chapter is unreadable if the page shows the two entries;
-    // it is obvious if it shows the two spans the model actually quoted.
-    const basis = claims.length ? el("div", { class: "basis" },
-      el("div", { class: "lbl" }, "判定依据 · 模型从原文逐字引用的片段"
-        + (claims.length > 1 ? "（" + claims.length + " 组）" : "")),
-      claims.map(c => el("div", { class: "quotes" },
-        el("div", { class: "quote" }, el("span", { class: "who" }, "A"), c.quote_left || "—"),
-        el("div", { class: "quote" }, el("span", { class: "who" }, "B"), c.quote_right || "—"))))
-      : el("div", { class: "warn" }, "这条提案没有引文证据，只按模型结论保留。看完整条目再决定。");
-
-    const keep = (entry, label) => entry ? el("button", {
-      class: "act keep", disabled: !!p.stale,
-      onclick: () => supersede(entry, other(p, entry.id), p),
-      title: p.stale || "保留这条，让另一条关闭有效期"
-    }, "保留 " + label + "（" + entry.chars + " 字）") : null;
-
-    const crowded = [p.left, p.right].filter(entry => entry && entry.crowded);
-    const warn = crowded.length ? el("div", { class: "warn" },
-      "其中 " + crowded.length + " 条装了不止一件事（"
-      + crowded.map(entry => entry.chars + " 字").join(" / ")
-      + "）。保留它没问题；但反过来取代它，会把它一并压住的其它内容一起从检索里藏掉。") : null;
-
-    const side = (entry, label) => {
-      if (!entry) return el("div", { class: "side" },
-        el("div", { class: "hint" }, label), el("div", { class: "empty" }, "这一侧在库里找不到了"));
-      const chosen = p.winner && p.winner === entry.id;
-      return el("div", { class: "side" + (chosen ? " chosen" : "") },
-        el("div", { class: "hint" }, label + " · " + (CAT[entry.category] || entry.category)
-          + (chosen ? " · 模型倾向保留这条" : "") + " · " + entry.id),
-        entryHead(entry),
-        renderBody(entry));
-    };
-
-    return el("article", { class: "item" },
-      el("div", { class: "meta" },
-        badge(contested ? "矛盾" : "重复", contested ? "danger" : "ok"),
-        badge("scope=" + (p.scope || "?")),
-        p.verified === false ? badge("证据未核实", "danger") : null,
-        p.stale ? badge("不可应用：" + p.stale, "blocked") : null,
-        el("span", {}, (p.detected_at || "").slice(0, 16).replace("T", " ") + " · " + (p.model || ""))),
-      basis,
-      p.reason ? el("div", { class: "reason" }, p.reason) : null,
-      el("div", { class: "acts" }, keep(p.left, "A"), keep(p.right, "B")),
-      warn,
-      el("details", { class: "entries" },
-        el("summary", {}, "展开两条完整记忆（A " + (p.left ? p.left.chars : "?")
-          + " 字 / B " + (p.right ? p.right.chars : "?") + " 字）"),
-        el("div", { class: "pair" }, side(p.left, "A"), side(p.right, "B"))));
-  }));
+  const keep = (entry, label) => {
+    if (!entry) return null;
+    const b = el("button", { class: "act yes" });
+    twoStep(b, "留 " + label, "确定留 " + label + "？", () => supersede(entry, other(p, entry.id), p));
+    return b;
+  };
+  const crowded = [p.left, p.right].filter(e => e && e.crowded);
+  card.append(el("div", { class: "acts" }, keep(p.left, "A"), keep(p.right, "B"), el("span", { class: "gap" }),
+    el("span", { class: "id" }, (p.left ? p.left.chars : "?") + " 字 / " + (p.right ? p.right.chars : "?") + " 字")));
+  if (crowded.length) {
+    card.append(el("div", { class: "warn" },
+      "其中 " + crowded.map(e => e.chars + " 字").join(" / ") + " 那条装了好几件事——"
+      + "取代它会连带藏掉里面的其它内容，留着它没有损失。"));
+  }
+  card.append(el("details", { class: "raw" },
+    el("summary", {}, "展开两条完整记忆"),
+    el("div", { class: "body" },
+      el("div", { class: "l-h" }, "A"), p.left ? rawBody(p.left) : el("div", { class: "l-p" }, "这一侧在库里找不到了"),
+      el("div", { class: "l-h" }, "B"), p.right ? rawBody(p.right) : el("div", { class: "l-p" }, "这一侧在库里找不到了"))));
+  return card;
 }
 
 function other(p, id) { return id === p.left_id ? p.right_id : p.left_id; }
 
-function renderSync() {
-  const o = state.overview;
-  if (!o) return;
-  const rows = o.sync.targets.map(t => el("tr", {},
-    el("td", {}, t.key),
-    el("td", {}, t.label),
-    el("td", { class: "mono" }, t.path),
-    el("td", {}, t.exists ? (t.changes ? "将更新" : "已是最新") : (t.note || "缺失"))));
-  document.getElementById("synctable").replaceChildren(
-    el("table", {}, el("thead", {}, el("tr", {},
-      el("th", {}, "目标"), el("th", {}, "工具"), el("th", {}, "文件"), el("th", {}, "状态"))),
-      el("tbody", {}, rows)));
+function renderFacts(o) {
+  const a = o.access || { calls: 0, labels: [], read_entries: 0 };
+  const s = o.summaries || { covered: 0, total: 0 };
+  const sync = o.sync.targets.every(t => t.exists && !t.changes) ? "已是最新" : "待写";
+  document.getElementById("facts").replaceChildren(
+    el("div", { class: "path" }, o.vault),
+    el("div", {}, "有效 ", el("b", {}, o.sync.live), " · 共 ", el("b", {}, o.total),
+      " 条 · 回写 ", el("b", {}, o.sync.block_chars.toLocaleString()), " 字（" + sync + "）",
+      " · 被 AI 读过 ", el("b", {}, a.calls), " 次",
+      a.labels.length ? "（" + a.labels.join("、") + "）" : ""),
+    s.total && s.covered < s.total
+      ? el("div", {}, "一句话概括 " + s.covered + "/" + s.total + " 条，其余的显示原文首行。跑 ",
+          el("b", {}, "memoryhub summarize"), " 可补齐。")
+      : null);
+  document.getElementById("n-todo").textContent = String(state.proposals.length + state.pending.length) || "";
+  document.getElementById("n-all").textContent = String(state.entries.length) || "";
 }
+
+function renderCats() {
+  const host = document.getElementById("cats");
+  const show = state.view === "all";
+  host.hidden = !show;
+  if (!show) { host.replaceChildren(); return; }
+  const counts = {};
+  for (const e of state.entries) counts[e.category] = (counts[e.category] || 0) + 1;
+  const keys = ["", ...Object.keys(CAT).filter(k => counts[k])];
+  host.replaceChildren(...keys.map(key =>
+    el("button", {
+      class: "pill sub", "aria-selected": state.cat === key ? "true" : "false",
+      onclick: () => { state.cat = key; renderCats(); renderFeed(); }
+    }, key ? CAT[key] : "全部", el("span", { class: "n" }, String(key ? counts[key] : state.entries.length)))));
+}
+
+function renderFeed() {
+  const host = document.getElementById("feed");
+  const cards = [];
+  if (state.view === "todo") {
+    cards.push(...state.proposals.map(proposalCard));
+    cards.push(...state.pending.map(e => entryCard(e, { todo: true })));
+    if (!cards.length) {
+      host.replaceChildren(el("div", { class: "empty" },
+        "没有要处理的东西。",
+        el("div", {}, "新记忆进来后会出现在这里；用 ",
+          el("code", {}, "memoryhub scan"), " 或 MCP 的 memory_propose 提交。")));
+      return;
+    }
+  } else {
+    const list = state.entries.filter(e => !state.cat || e.category === state.cat);
+    if (!list.length) {
+      host.replaceChildren(el("div", { class: "empty" }, "这一类还没有记忆。"));
+      return;
+    }
+    cards.push(...list.map(e => entryCard(e)));
+  }
+  host.replaceChildren(...cards);
+}
+
+function render() {
+  renderFacts(state.overview);
+  renderCats();
+  renderFeed();
+}
+
+// -------------------------------------------------------------------- actions
 
 async function decide(entry, action, category) {
   try {
     const out = await api("/api/review", { id: entry.id, action, category });
-    const word = action === "approve" ? "已批准" : action === "reject" ? "已拒绝" : "分类已改";
-    toast(word + " " + entry.id);
-    const out2 = out.entry;
-    if (out2 && action === "category") {
-      state.pending = state.pending.map(e => e.id === entry.id ? out2 : e);
-      renderPending();
+    if (action === "category") {
+      state.pending = state.pending.map(e => e.id === entry.id ? out.entry : e);
+      state.entries = state.entries.map(e => e.id === entry.id ? out.entry : e);
+      toast("已改成「" + CAT[category] + "」");
     } else {
       state.pending = state.pending.filter(e => e.id !== entry.id);
-      state.cursor = Math.max(0, Math.min(state.cursor, state.pending.length - 1));
-      renderPending();
+      toast(action === "approve" ? "已留下，从现在起每个 AI 都能读到" : "已丢掉，文件还在 inbox/rejected");
     }
-    await reload({ keepPending: true });
+    renderFeed();
+    await reload({ keepLists: true });
   } catch (err) {
     toast(err.message, true);
   }
 }
 
 async function supersede(keepEntry, retireId, proposal) {
-  const keepId = keepEntry.id;
-  let msg = "保留 " + keepId + "，让 " + retireId + " 关闭有效期？\n\n旧条目不会删除，保留可追溯。";
-  if (keepEntry.crowded) {
-    msg += "\n\n注意：这条 " + keepEntry.chars + " 字里装了好几件事。它被取代时，这些内容会一起从检索和回写里消失 —— 如果其中只有一句过期，先去命令行把还有效的部分拆成独立记忆。";
-  }
-  if (!confirm(msg)) return;
   try {
-    await api("/api/supersede", { old: retireId, new: keepId, note: "webui:" + (proposal.relation || "") });
-    toast("已取代 " + retireId);
+    await api("/api/supersede", {
+      old: retireId, new: keepEntry.id, note: "webui:" + (proposal.relation || "")
+    });
+    toast("已保留这一条，另一条关闭有效期（没有删除）");
     await reload();
   } catch (err) {
     toast(err.message, true);
   }
 }
 
-function switchTab(name) {
-  for (const b of document.querySelectorAll(".tabs button")) {
-    const on = b.dataset.tab === name;
-    b.setAttribute("aria-selected", on ? "true" : "false");
-    document.getElementById("panel-" + b.dataset.tab).hidden = !on;
-  }
-}
-
 async function reload(opts) {
-  const keepPending = opts && opts.keepPending;
-  const [overview, pending, proposals] = await Promise.all([
+  const keep = opts && opts.keepLists;
+  const [overview, pending, proposals, entries] = await Promise.all([
     api("/api/overview"),
-    keepPending ? Promise.resolve({ entries: state.pending }) : api("/api/pending"),
-    api("/api/proposals")
+    keep ? Promise.resolve({ entries: state.pending }) : api("/api/pending"),
+    api("/api/proposals"),
+    api("/api/entries?limit=300")
   ]);
   state.overview = overview;
   state.pending = pending.entries;
   state.proposals = proposals.proposals;
-  renderCards(overview);
-  renderPending();
-  renderProposals();
-  renderSync();
+  state.entries = entries.entries;
+  render();
   if (overview.unreadable && overview.unreadable.length) {
-    toast(overview.unreadable.length + " 个文件读不出来，它们仍是 pending", true);
+    toast(overview.unreadable.length + " 个文件读不出来", true);
   }
 }
 
 document.getElementById("refresh").addEventListener("click", () => reload().catch(e => toast(e.message, true)));
-for (const b of document.querySelectorAll(".tabs button")) {
-  b.addEventListener("click", () => switchTab(b.dataset.tab));
+for (const b of document.querySelectorAll("#pills .pill")) {
+  b.addEventListener("click", () => {
+    state.view = b.dataset.view;
+    for (const other of document.querySelectorAll("#pills .pill")) {
+      other.setAttribute("aria-selected", other === b ? "true" : "false");
+    }
+    renderCats();
+    renderFeed();
+  });
 }
 
 document.addEventListener("keydown", (ev) => {
   if (ev.target.matches("input, select, textarea")) return;
-  if (!document.getElementById("panel-pending").hidden === false) {
-    if (ev.key === "j" || ev.key === "k") {
-      state.cursor = Math.max(0, Math.min(state.pending.length - 1, state.cursor + (ev.key === "j" ? 1 : -1)));
-      renderPending();
-      document.querySelectorAll("#pending .item")[state.cursor]?.scrollIntoView({ block: "center" });
-    }
-    const cur = state.pending[state.cursor];
-    if (!cur) return;
-    if (ev.key === "a" && cur.trust !== "blocked") decide(cur, "approve");
-    if (ev.key === "r") decide(cur, "reject");
+  if (state.view !== "todo") return;
+  const todo = [...state.proposals.map(p => null), ...state.pending];
+  if (!todo.length) return;
+  if (ev.key === "j" || ev.key === "k") {
+    state.cursor = Math.max(0, Math.min(todo.length - 1, state.cursor + (ev.key === "j" ? 1 : -1)));
+    document.querySelectorAll("#feed .card")[state.cursor]?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
+  const cur = todo[state.cursor];
+  if (!cur) return;
+  if (ev.key === "a" && cur.trust !== "blocked") decide(cur, "approve");
+  if (ev.key === "r") decide(cur, "reject");
 });
 
 reload().catch(err => {
   toast(err.message, true);
-  document.querySelector("main").append(el("p", { class: "tip" }, "如果提示 token 错误，回到终端用最新打印的地址重新打开。"));
+  document.getElementById("feed").append(el("div", { class: "empty" },
+    "连不上。如果提示 token 错误，回到终端用最新打印的地址重新打开。"));
 });
 </script>
 </body>

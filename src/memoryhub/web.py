@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import access, conflicts, sync
+from . import access, conflicts, summary, sync
 from .models import CATEGORIES, MemoryEntry, ValidationError
 from .storage.markdown_store import StaleEntryError, VaultStore
 
@@ -99,6 +99,20 @@ _HEADING_RE = re.compile(r"^\s*#{1,6}\s+(.+?)\s*#*\s*$")
 _BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$")
 
 
+#: A bare section label: "二、经历与求职背景", "## 十、审美偏好". Useful as a
+#: table of contents, useless as the one line you read while scanning.
+_SECTION_LABEL = re.compile(r"^\s*(?:#{1,6}\s*)?[一二三四五六七八九十百]+\s*[、.．]")
+
+#: "电脑：MateBook 14s", "生源地：河南省郑州市". A colon in the first stretch of
+#: an entry almost always means "this line is one fact", which is exactly what a
+#: card title should be.
+_FACT_COLON = re.compile(r"[：:]")
+
+#: How far into an entry to look for a better line. Beyond this the candidate is
+#: no longer a summary of the entry, it is a random detail from its middle.
+HEADLINE_SCAN = 12
+
+
 def headline(entry: MemoryEntry) -> Dict[str, Any]:
     """The one line you read while scanning a list -- **taken**, not written.
 
@@ -109,28 +123,84 @@ def headline(entry: MemoryEntry) -> Dict[str, Any]:
     title would be the first place it gets violated -- in the most visible
     position on the page.
 
-    What it gives up: a 401-character entry about a workbench reads as
-    "个人工作台「我的大四」", not as a sentence explaining what changed. That
-    sentence has to come from a synthesis layer (P3-03), which needs finer
-    evidence than these entries currently have. Until then, an honest label
-    beats a fluent guess.
+    Order of preference, and why:
+
+    1. **A line with a colon** -- "电脑：MateBook 14s 2023". A colon in the first
+       stretch of an entry usually marks one self-contained fact, which is what
+       a card title is supposed to be.
+    2. **A line with actual content** -- anything that is not a section label.
+    3. **The section label itself** -- "十、审美偏好". True and dull, but it is
+       what the entry says about itself, and it beats showing nothing.
+    4. **Whatever the first non-empty line is** -- covers entries that start
+       mid-list because the splitter cut them there.
+
+    What it still gives up: a 401-character entry about a workbench reads as
+    "工作台目录：...", not as a sentence explaining what changed. That sentence
+    has to come from ``summary`` (``memoryhub summarize``), which needs the user's
+    own API key and is marked ``derived`` on the card.
 
     ``skip`` is how many leading lines the headline consumed, so the body is not
     shown with its own title repeated underneath it.
     """
     lines = entry.body.strip().splitlines()
-    for index, line in enumerate(lines):
-        match = _HEADING_RE.match(line)
-        if match:
-            return {"text": _clip(match.group(1)), "skip": index + 1}
-    for line in lines:
-        match = _BULLET_RE.match(line)
-        if match:
-            # Not skipped: a bullet's siblings are the rest of the list, and
-            # dropping the first one would leave the list starting mid-way.
-            return {"text": _clip(_plain(match.group(1))), "skip": 0}
-    first = next((line for line in lines if line.strip()), "")
-    return {"text": _clip(_plain(first)), "skip": 0}
+    window = lines[:HEADLINE_SCAN]
+
+    def _is_label(line: str) -> bool:
+        text = line.strip()
+        if not text:
+            return True
+        if _HEADING_RE.match(text) or _SECTION_LABEL.match(text):
+            return True
+        # Short, no colon, no sentence punctuation: a label, not a statement.
+        return len(text) <= 12 and not _FACT_COLON.search(text) and not re.search(r"[。！？，,]", text)
+
+    picked: Optional[tuple] = None
+    for index, line in enumerate(window):
+        text = _plain(line)
+        match = _BULLET_RE.match(text)
+        body_text = match.group(1) if match else text
+        body_text = _HEADING_RE.sub(r"\1", body_text).strip()
+        if not body_text or _is_label(body_text):
+            continue
+        if body_text.startswith("#"):
+            continue
+        picked = (index, body_text)
+        if _FACT_COLON.search(body_text):
+            break
+    if picked is None:
+        for index, line in enumerate(window):
+            text = _plain(line).strip()
+            if not text:
+                continue
+            text = _BULLET_RE.sub(r"\1", text)
+            text = _HEADING_RE.sub(r"\1", text).strip()
+            if not text:
+                continue
+            return {"text": _clip(text), "skip": index + 1, "section": _section(lines, index)}
+        return {"text": "", "skip": 0, "section": ""}
+
+    index, text = picked
+    # Hide the lines the headline consumed only when they were labels; otherwise
+    # the body would lose real content the headline never showed.
+    skip = index + 1 if index == 0 or all(_is_label(l) for l in lines[:index]) else 0
+    return {"text": _clip(text), "skip": skip, "section": _section(lines, index)}
+
+
+def _section(lines: List[str], index: int) -> str:
+    """The label the headline pushed aside, if the entry opened with one.
+
+    "十、审美偏好" is a poor card title and a useful caption: it says which part
+    of the dossier this fact came from. The page shows it as a small chip, so the
+    card reads as one fact *and* keeps its filing shelf.
+    """
+    for line in reversed(lines[:index]):
+        raw = line.strip()
+        if not (_HEADING_RE.match(raw) or _SECTION_LABEL.match(raw)):
+            continue
+        text = _HEADING_RE.sub(r"\1", _plain(raw)).strip()
+        if text:
+            return _clip(text, 24)
+    return ""
 
 
 def _plain(text: str) -> str:
@@ -149,7 +219,16 @@ def _clip(text: str, limit: int = MAX_HEADLINE) -> str:
 # --------------------------------------------------------------------- payloads
 
 
-def entry_brief(entry: MemoryEntry) -> Dict[str, Any]:
+def entry_brief(
+    entry: MemoryEntry, summaries: Optional[Dict[str, Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    """The shape every card is rendered from.
+
+    ``summary`` is the derived one-liner (``None`` when absent or stale). It is
+    shown as the card title and nothing else reads it -- search, MCP and the
+    managed block all use ``body``, which is why a wrong sentence here is a bad
+    first impression rather than a wrong fact in three AIs' context.
+    """
     return {
         "id": entry.id,
         "category": entry.category,
@@ -169,6 +248,7 @@ def entry_brief(entry: MemoryEntry) -> Dict[str, Any]:
         "lines": len(entry.body.strip().splitlines()),
         "crowded": is_crowded(entry),
         "headline": headline(entry),
+        "summary": summary.for_entry(summaries, entry) if summaries else None,
     }
 
 
@@ -221,7 +301,31 @@ class App:
                 ],
             },
             "access": access.summary(self.store.root),
+            "summaries": summary.stats(live, self._summaries()),
         }
+
+    def _summaries(self) -> Dict[str, Dict[str, Any]]:
+        """The derived one-liners, read fresh each request.
+
+        A dict of a few hundred short strings; re-reading it is cheaper than
+        reasoning about when it went stale. It is also the only thing on this
+        page that can be *wrong about meaning*, so it is never cached across a
+        request that might have changed an entry.
+        """
+        return summary.load(self.store.root)
+
+    def browse(self, limit: int = 300) -> List[Dict[str, Any]]:
+        """Approved memories, newest first -- the "what do I know about me" view.
+
+        Read-only on purpose: acting on a card is something you do while triaging,
+        not while browsing. A page that can approve from the archive view turns
+        scrolling into deciding.
+        """
+        entries, _ = self.store.scan()
+        live = [e for e in entries if e.status == "approved" and not e.superseded_by]
+        live.sort(key=lambda e: (e.created_at, e.id), reverse=True)
+        summaries = self._summaries()
+        return [entry_brief(entry, summaries) for entry in live[: max(1, limit)]]
 
     def pending(self) -> List[Dict[str, Any]]:
         entries, _ = self.store.scan()
@@ -229,10 +333,12 @@ class App:
         # Blocked first: they cannot be approved, and finding that out after
         # reading forty entries is the one thing the CLI loop cannot avoid.
         queue.sort(key=lambda e: (e.trust != "blocked", e.created_at, e.id))
-        return [entry_brief(entry) for entry in queue]
+        summaries = self._summaries()
+        return [entry_brief(entry, summaries) for entry in queue]
 
     def proposals(self) -> List[Dict[str, Any]]:
         records, _ = conflicts.load_records(self.store.root)
+        summaries = self._summaries()
         out: List[Dict[str, Any]] = []
         for record in records:
             pair = record.get("pair") or []
@@ -250,8 +356,8 @@ class App:
                     "detected_at": record.get("detected_at"),
                     "model": record.get("model"),
                     "claims": record.get("claims") or [],
-                    "left": entry_brief(left) if left else None,
-                    "right": entry_brief(right) if right else None,
+                    "left": entry_brief(left, summaries) if left else None,
+                    "right": entry_brief(right, summaries) if right else None,
                     # A proposal whose entries have moved on cannot be applied
                     # by the browser: the ids still resolve, but a status change
                     # since detection makes the pair's premise stale.
@@ -421,6 +527,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"entries": self.app.pending()})
             elif path == "/api/proposals":
                 self._json(200, {"proposals": self.app.proposals()})
+            elif path == "/api/entries":
+                try:
+                    limit = int((parse_qs(urlparse(self.path).query).get("limit") or ["300"])[0])
+                except ValueError:
+                    limit = 300
+                self._json(200, {"entries": self.app.browse(limit)})
             else:
                 self._json(404, {"ok": False, "error": "没有这个地址"})
         except Exception as exc:  # noqa: BLE001 - a 500 must still be JSON

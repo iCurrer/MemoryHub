@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from memoryhub import access, conflicts, web  # noqa: E402
+from memoryhub import access, conflicts, summary, web  # noqa: E402
 from memoryhub.models import MemoryEntry  # noqa: E402
 from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
 
@@ -88,7 +88,7 @@ class AuthTests(ServerCase):
         status, html = self.request("GET", f"/?t={app.token}")
         self.assertEqual(status, 200)
         self.assertIn(app.token, html)
-        self.assertIn("MEMORYHUB", html)
+        self.assertIn("<title>MemoryHub</title>", html)
 
     def test_page_shell_loads_without_a_token_but_holds_no_secret(self) -> None:
         # A reload used to be a dead end: the script rewrote the URL, and the
@@ -380,19 +380,36 @@ class HeadlineTests(unittest.TestCase):
             body="## 十五、优先事项（2026-11-24 快照）\n\n1. 毕业论文：确定选题\n2. 求职：探索 AI 产品",
         )
 
-    def test_markdown_heading_becomes_the_headline_and_is_skipped(self) -> None:
+    def test_a_section_label_becomes_the_caption_not_the_title(self) -> None:
+        # "十五、优先事项（2026-11-24 快照）" is a filing shelf, not a fact. The
+        # card wants the fact on top and the shelf in a small chip.
         head = web.headline(self.heading_entry())
-        self.assertEqual(head["text"], "十五、优先事项（2026-11-24 快照）")
-        self.assertEqual(head["skip"], 1)
+        self.assertEqual(head["text"], "毕业论文：确定选题")
+        self.assertEqual(head["section"], "十五、优先事项（2026-11-24 快照）")
+        self.assertEqual(head["skip"], 3, "标题行、空行与选中的那行都不必再出现")
 
-    def test_a_bullet_is_used_but_not_skipped(self) -> None:
+    def test_an_entry_with_no_fact_line_falls_back_to_its_label(self) -> None:
+        entry = MemoryEntry.create(category="profile", body="## 十、审美偏好\n\n## 十一、摄影\n")
+        head = web.headline(entry)
+        self.assertIn("审美偏好", head["text"])
+
+    def test_a_section_caption_is_only_ever_a_label(self) -> None:
+        # A previous bullet is not a shelf. Using one produced captions like
+        # "- 视觉中国签约摄影师；2024 C…" in the chip.
+        entry = MemoryEntry.create(
+            category="knowledge",
+            body="- 视觉中国签约摄影师\n- 老物件维修关注：iPod touch 1G\n",
+        )
+        self.assertEqual(web.headline(entry)["section"], "")
+
+    def test_a_bullet_is_used_and_not_repeated_below(self) -> None:
         entry = MemoryEntry.create(
             category="decision",
             body="- **主线（2026.09 更新）：** 新道实习已结束，当前重心是备考。\n- **次线：** 别的事",
         )
         head = web.headline(entry)
         self.assertTrue(head["text"].startswith("主线"))
-        self.assertEqual(head["skip"], 0, "跳过第一条会留下半截列表")
+        self.assertEqual(head["skip"], 1, "标题已经把第一条说完了，正文不该再说一遍")
 
     def test_plain_first_line_is_used_as_is(self) -> None:
         entry = MemoryEntry.create(
@@ -426,9 +443,89 @@ class HeadlineTests(unittest.TestCase):
     def test_payload_carries_headline_and_line_count(self) -> None:
         entry = self.heading_entry()
         brief = web.entry_brief(entry)
-        self.assertEqual(brief["headline"]["skip"], 1)
+        self.assertEqual(brief["headline"]["skip"], 3)
         self.assertEqual(brief["lines"], len(entry.body.strip().splitlines()))
 
+
+class BrowseAndSummaryTests(ServerCase):
+    """The card feed needs one more view and one optional sentence."""
+
+    def approved(self, body: str, created_at: str = "", category: str = "preference") -> MemoryEntry:
+        entry = MemoryEntry.create(
+            category=category,
+            body=body,
+            source_adapter="test",
+            created_at=created_at or "2026-11-24T09:00:00+08:00",
+        )
+        self.store.create(entry)
+        self.store.set_status(entry.id, "approved")
+        return entry
+
+    def test_entries_returns_approved_newest_first_and_nothing_else(self) -> None:
+        app = self.start()
+        old = self.approved("旧的一条。", created_at="2020-01-01T00:00:00+08:00")
+        new = self.approved("新的一条。", created_at="2026-11-25T00:00:00+08:00")
+        pending = self.seed("还没审的一条。", category="preference")
+
+        status, body = self.request("GET", "/api/entries", token=app.token)
+        self.assertEqual(status, 200)
+        ids = [item["id"] for item in body["entries"]]
+        self.assertEqual(ids, [new.id, old.id])
+        self.assertNotIn(pending.id, ids)
+
+    def test_a_superseded_entry_is_not_browsable(self) -> None:
+        app = self.start()
+        kept = self.approved("留下的一条。")
+        gone = self.approved("被取代的一条。")
+        conflicts.apply_supersede(self.store, gone.id, kept.id, note="test")
+        status, body = self.request("GET", "/api/entries", token=app.token)
+        self.assertEqual(status, 200)
+        ids = [item["id"] for item in body["entries"]]
+        self.assertIn(kept.id, ids)
+        self.assertNotIn(gone.id, ids)
+
+    def test_the_card_carries_the_stored_sentence(self) -> None:
+        app = self.start()
+        entry = self.approved("## 十、审美偏好\n\n喜欢：Apple 风格、Notion。")
+        summary.save(self.store.root, {entry.id: {
+            "line": "审美偏好偏 Apple 与 Notion",
+            "quote": "喜欢：Apple 风格",
+            "body_hash": summary.body_hash(entry.body),
+            "model": "m", "at": "2026-11-25T00:00:00+08:00",
+        }})
+        status, body = self.request("GET", "/api/entries", token=app.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["entries"][0]["summary"], "审美偏好偏 Apple 与 Notion")
+        # The entry's own line is still there, so the page can show the quote
+        # when it explains where the sentence came from.
+        self.assertEqual(body["entries"][0]["headline"]["text"], "喜欢：Apple 风格、Notion。")
+
+    def test_a_stale_sentence_is_not_shown(self) -> None:
+        # The sidecar can outlive the body it described. Showing it anyway would
+        # be the one failure mode that looks like success.
+        app = self.start()
+        entry = self.approved("正文第一版。")
+        summary.save(self.store.root, {entry.id: {
+            "line": "旧的概括", "quote": "正文第一版",
+            "body_hash": summary.body_hash("完全不同的正文"),
+            "model": "m", "at": "2026-11-25T00:00:00+08:00",
+        }})
+        status, body = self.request("GET", "/api/entries", token=app.token)
+        self.assertEqual(status, 200, body)
+        self.assertIsNone(body["entries"][0]["summary"])
+
+    def test_overview_reports_how_many_cards_have_a_sentence(self) -> None:
+        app = self.start()
+        one = self.approved("一条有概括的。")
+        self.approved("一条没有概括的。")
+        summary.save(self.store.root, {one.id: {
+            "line": "一句", "quote": "一条有概括的",
+            "body_hash": summary.body_hash(one.body),
+            "model": "m", "at": "2026-11-25T00:00:00+08:00",
+        }})
+        status, body = self.request("GET", "/api/overview", token=app.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["summaries"], {"total": 2, "covered": 1, "missing": 1})
 
 if __name__ == "__main__":
     unittest.main()

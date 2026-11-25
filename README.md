@@ -129,23 +129,33 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - `memoryhub access` 看总览，`--entry <id>` 看单条。它是**提示，不是审计**：1 MiB 轮转、
   只留一代、写失败绝不打断读
 
-**本机页面（P6-03）**
+**本机页面（P6-03，ADR-020 / ADR-022）**
 
-- `memoryhub serve` 起一个本地页面，把**两个队列**摆出来：待审条目、冲突提案；外加回写计划的总览
+- `memoryhub serve` 起一个本地页面，**一条纵向卡片流**：待办（冲突提案 + 待审条目）与已记（只读浏览，可按分类筛）
+- 每张卡是「一句话 + 分类 chip + 两个按钮」，原文一点展开。标题优先取条目里**带冒号的那一行**（原文子串，不生成）
+- 破坏性操作**点两下**（第一下变成「确定留着？」，5 秒后复位）。页面里**没有任何原生对话框** —— 它在预览 iframe 里静默失败，曾让「保留」按钮看起来是坏的
 - 只绑 `127.0.0.1`，没有 `--host`；校验 `Host` 头（防 DNS rebinding）；每次启动一枚随机 token，走 header 不走 cookie
 - 标准库 `http.server` + 单文件 HTML，**不加依赖、没有构建步骤**，页面里没有任何外部链接
 - 写操作调的是 CLI 同一批函数（`set_status` / `apply_supersede`），所以 `blocked` 硬拒绝与取代链四道闸原样生效
 - `sync --write` 不在页面里：它改的是别的工具每次会话都要加载的文件
-- 长条目在「保留这条」旁单独告警 —— 401 字的混装条目被取代，会连带藏掉其它三件事
+- 装混的条目（≥180 字或多主题）在取代按钮旁单独提示 —— 401 字的混装条目被取代，会连带藏掉其它三件事
+
+**一句话概括（可选，ADR-022）**
+
+- `memoryhub summarize` 为每条记忆生成一句话，存 `database/summaries.json`，卡片标题显示它并标「概括」
+- 每条概括必须附一段**逐字复制**的原文引用；引用在正文里定位不到就丢弃，卡片退回显示原文首行
+- 正文一改（或重新切分），旧概括立即失效（记录 `body_hash`）。删掉整个文件不影响任何功能
+- **不进 vault、不进检索、不进回写区块** —— 检索和回写只读 `body`。一句概括错了是初次印象差，一句正文错了是三个 AI 的上下文里多一条假事实
+- 需要用户自己的 API key；不配也能用，只是标题粗糙。`--dry-run` 只列清单不花钱
 
 **其他**
 
-- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `sync` `serve` `list` `show` `search` `approve` `reject` `review` `conflicts` `supersede` `sensitivity` `backup` `stats`
+- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `sync` `serve` `summarize` `access` `list` `show` `search` `approve` `reject` `review` `conflicts` `supersede` `sensitivity` `backup` `stats`
 - **索引**：SQLite FTS5 + trigram，中文可检索；删掉 `database/index.db` 会自动重建，结果不变
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目
 - 保存前校验快照是否过期（`StaleEntryError`），不会把已批准的条目误降级
-- 403 个单元测试（含 16 个片段配对、51 个冲突/取代、20 个回写分发、29 个本机页面、14 个访问日志、32 个 CLI 端到端、11 个 watcher、9 个索引、34 个 MCP 含真实 stdio 会话），全部通过
+- 430 个单元测试（含 16 个片段配对、51 个冲突/取代、20 个回写分发、36 个本机页面、20 个一句话概括、14 个访问日志、32 个 CLI 端到端、11 个 watcher、9 个索引、34 个 MCP 含真实 stdio 会话），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 
