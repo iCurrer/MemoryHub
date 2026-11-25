@@ -66,9 +66,27 @@
   }
   .item.blocked { border-color: #5c3b14; }
   .item .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 11px; color: var(--faint); margin-bottom: 8px; }
-  .item .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .item .body { overflow-wrap: anywhere; }
   .item .acts { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
   .item .acts .id { color: var(--faint); font-size: 11px; margin-left: auto; }
+
+  /* One scannable line per entry. Extracted from the body, never generated --
+     see web.headline() for why that matters. */
+  .headline {
+    font-size: 14px; line-height: 1.5; color: #eef3f9; margin: 0 0 8px;
+    overflow-wrap: anywhere;
+  }
+  .body .l-h { color: #cfd8e3; font-weight: 600; margin: 10px 0 4px; }
+  .body .l-h:first-child { margin-top: 0; }
+  .body .l-li { padding-left: 15px; position: relative; color: var(--fg); }
+  .body .l-li::before { content: "·"; position: absolute; left: 4px; color: var(--faint); }
+  .body .l-p { color: var(--fg); }
+  .body .l-gap { height: 6px; }
+  .more {
+    background: transparent; border: 0; color: var(--accent); cursor: pointer;
+    font: inherit; font-size: 12px; padding: 4px 0 0; opacity: .85;
+  }
+  .more:hover { opacity: 1; text-decoration: underline; }
 
   .badge { border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; color: var(--dim); }
   .badge.cat { color: var(--fg); border-color: var(--faint); }
@@ -83,6 +101,7 @@
   button.act:hover { border-color: var(--faint); }
   button.act:disabled { opacity: .4; cursor: not-allowed; }
   button.act.primary { color: #05130a; background: var(--ok); border-color: var(--ok); }
+  button.act.keep:hover:not(:disabled) { color: var(--ok); border-color: var(--ok); }
   button.act.danger { color: var(--no); }
   button.act.danger:hover { border-color: var(--no); }
 
@@ -92,12 +111,36 @@
   .side.chosen { border-color: var(--ok); }
   .side .hint { color: var(--faint); font-size: 11px; margin-bottom: 6px; }
   .reason { color: var(--dim); border-left: 2px solid var(--line); padding: 2px 0 2px 10px; margin: 10px 0; font-size: 12px; }
+  /* The verdict rests on two quoted spans, not on two whole entries. These get
+     shown first and the entries folded behind them -- otherwise a 44-character
+     sentence and a 382-character chapter look like nothing alike. */
+  .basis { margin-bottom: 10px; }
+  .basis .lbl { color: var(--faint); font-size: 11px; letter-spacing: .06em; margin: 0 0 5px; }
+  .quotes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media (max-width: 760px) { .quotes { grid-template-columns: 1fr; } }
+  .quote {
+    background: #12181f; border: 1px solid #24303c; border-left: 2px solid var(--accent);
+    border-radius: 4px; padding: 7px 10px; font-size: 12.5px; color: #e6edf5;
+    overflow-wrap: anywhere;
+  }
+  .quote .who { color: var(--faint); font-size: 10.5px; display: block; margin-bottom: 3px; }
+  details.entries { margin-top: 10px; }
+  details.entries > summary {
+    cursor: pointer; color: var(--dim); font-size: 12px; padding: 3px 0;
+    /* display:flex drops the native marker in every engine; list-style alone
+       did not, and the ::before never showed up. */
+    display: flex; align-items: center; gap: 7px; list-style: none;
+  }
+  details.entries > summary::-webkit-details-marker { display: none; }
+  details.entries > summary::before {
+    content: "▸"; color: var(--faint); font-size: 10px; line-height: 1;
+  }
+  details.entries[open] > summary::before { content: "▾"; }
+  details.entries > summary:hover { color: var(--fg); }
   .warn {
     color: #e3b341; background: #2b2008; border: 1px solid #5c3b14; border-radius: 4px;
     padding: 6px 9px; margin-top: 8px; font-size: 12px;
   }
-  .claims { margin: 8px 0 0; padding-left: 18px; color: var(--dim); font-size: 12px; }
-  .claims q { color: var(--fg); }
 
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -150,15 +193,17 @@
 <div id="toast"></div>
 
 <script>
-// The token is rendered into the meta tag by the server; the URL parameter is a
-// fallback for a page saved before this was added. Never in localStorage --
-// sessionStorage dies with the tab, and this page has no business surviving it.
+// The token is rendered into the meta tag by the server when the request proves
+// it has one; otherwise it comes from the URL or from this tab. Never in
+// localStorage -- sessionStorage dies with the tab.
 const metaEl = document.querySelector('meta[name="mh-token"]');
 const rendered = metaEl ? metaEl.content : "";
 let TOKEN = rendered && !rendered.startsWith("__") ? rendered : "";
 if (!TOKEN) TOKEN = new URLSearchParams(location.search).get("t") || sessionStorage.getItem("mh-token") || "";
 if (TOKEN) sessionStorage.setItem("mh-token", TOKEN);
-if (location.search.includes("t=")) history.replaceState(null, "", location.pathname);
+// The ?t= is left in the address bar on purpose: stripping it looked tidy and
+// turned every reload into a 401, because the URL was the only copy the server
+// could check. The token is per-run, so a URL in history is a URL to nothing.
 
 const CAT = { profile: "身份", decision: "决定", preference: "偏好", project: "项目", knowledge: "知识" };
 let state = { overview: null, pending: [], proposals: [], cursor: 0 };
@@ -201,6 +246,58 @@ function toast(msg, bad) {
 }
 
 function badge(text, cls) { return el("span", { class: "badge" + (cls ? " " + cls : "") }, text); }
+
+// ---------------------------------------------------------------- entry body
+
+//: Lines shown before the "expand" control. Four fits one screenful of cards
+//: without any single entry dominating it.
+const BODY_LINES = 4;
+
+function lineNode(line) {
+  const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+  if (heading) return el("div", { class: "l-h" }, heading[1].replace(/\*\*/g, ""));
+  const bullet = line.match(/^\s*(?:[-*+]|\d+[.)])\s+(.*)$/);
+  if (bullet) return el("div", { class: "l-li" }, bullet[1].replace(/\*\*/g, ""));
+  if (!line.trim()) return el("div", { class: "l-gap" });
+  return el("div", { class: "l-p" }, line.replace(/\*\*/g, ""));
+}
+
+/**
+ * The body, structured by its own lines, folded to BODY_LINES.
+ *
+ * Structure comes from the entry, not from a renderer guess: an entry cut out
+ * of a `##` section keeps its heading, a list keeps its bullets. That alone is
+ * most of the difference between "a wall of text" and "something organised" --
+ * no rewriting of the content, no summary, nothing that could be wrong.
+ */
+function renderBody(entry) {
+  const all = entry.body.split("\n");
+  const skip = (entry.headline && entry.headline.skip) || 0;
+  const nodes = all.slice(skip).map(lineNode);
+  const wrap = el("div", { class: "body" });
+  const hiddenCount = nodes.length - BODY_LINES;
+  nodes.forEach((node, i) => { if (i >= BODY_LINES) node.hidden = true; wrap.append(node); });
+  if (hiddenCount > 0) {
+    const label = "展开剩余 " + hiddenCount + " 行（共 " + entry.chars + " 字）";
+    const button = el("button", { class: "more" }, label);
+    button.addEventListener("click", () => {
+      const folded = button.dataset.open !== "1";
+      nodes.forEach((node, i) => { if (i >= BODY_LINES) node.hidden = !folded; });
+      button.dataset.open = folded ? "1" : "0";
+      button.textContent = folded ? "收起" : label;
+    });
+    wrap.append(button);
+  }
+  return wrap;
+}
+
+function entryHead(entry) {
+  if (!entry.headline || !entry.headline.text) return null;
+  // Under 60 characters the body *is* the headline; repeating it looks broken.
+  if (entry.chars <= 60) return null;
+  return el("div", { class: "headline" }, entry.headline.text);
+}
+
 
 function renderCards(o) {
   const cards = document.getElementById("cards");
@@ -245,7 +342,8 @@ function renderPending() {
         e.sensitivity !== "normal" ? badge("sensitivity=" + e.sensitivity, "danger") : null,
         blocked ? badge("blocked", "blocked") : null,
         el("span", {}, e.chars + " 字 · " + (e.created_at || "").slice(0, 16).replace("T", " "))),
-      el("div", { class: "body" }, e.body),
+      entryHead(e),
+      renderBody(e),
       el("div", { class: "acts" },
         el("button", {
           class: "act primary", disabled: blocked,
@@ -269,24 +367,44 @@ function renderProposals() {
     host.replaceChildren(el("div", { class: "empty" }, "没有未处理的提案。"));
     return;
   }
-  host.replaceChildren(...state.proposals.map((p, i) => {
+  host.replaceChildren(...state.proposals.map((p) => {
     const contested = p.relation === "contradicts";
+    const claims = (p.claims || []).filter(c => c.quote_left || c.quote_right);
+
+    // The evidence first. A verdict between a 44-character sentence and a
+    // 382-character chapter is unreadable if the page shows the two entries;
+    // it is obvious if it shows the two spans the model actually quoted.
+    const basis = claims.length ? el("div", { class: "basis" },
+      el("div", { class: "lbl" }, "判定依据 · 模型从原文逐字引用的片段"
+        + (claims.length > 1 ? "（" + claims.length + " 组）" : "")),
+      claims.map(c => el("div", { class: "quotes" },
+        el("div", { class: "quote" }, el("span", { class: "who" }, "A"), c.quote_left || "—"),
+        el("div", { class: "quote" }, el("span", { class: "who" }, "B"), c.quote_right || "—"))))
+      : el("div", { class: "warn" }, "这条提案没有引文证据，只按模型结论保留。看完整条目再决定。");
+
+    const keep = (entry, label) => entry ? el("button", {
+      class: "act keep", disabled: !!p.stale,
+      onclick: () => supersede(entry, other(p, entry.id), p),
+      title: p.stale || "保留这条，让另一条关闭有效期"
+    }, "保留 " + label + "（" + entry.chars + " 字）") : null;
+
+    const crowded = [p.left, p.right].filter(entry => entry && entry.crowded);
+    const warn = crowded.length ? el("div", { class: "warn" },
+      "其中 " + crowded.length + " 条装了不止一件事（"
+      + crowded.map(entry => entry.chars + " 字").join(" / ")
+      + "）。保留它没问题；但反过来取代它，会把它一并压住的其它内容一起从检索里藏掉。") : null;
+
     const side = (entry, label) => {
-      if (!entry) return el("div", { class: "side" }, el("div", { class: "hint" }, label), el("div", { class: "empty" }, "这一侧在库里找不到了"));
+      if (!entry) return el("div", { class: "side" },
+        el("div", { class: "hint" }, label), el("div", { class: "empty" }, "这一侧在库里找不到了"));
       const chosen = p.winner && p.winner === entry.id;
       return el("div", { class: "side" + (chosen ? " chosen" : "") },
-        el("div", { class: "hint" }, label + " · " + (CAT[entry.category] || entry.category) + (chosen ? " · 模型倾向保留这条" : "")),
-        el("div", { class: "body" }, entry.body),
-        entry.crowded ? el("div", { class: "warn" },
-          "这条装了不止一件事（" + entry.chars + " 字）。保留它没问题；但反过来取代它，会把它一并压住的其它内容一起从检索里藏掉。") : null,
-        el("div", { class: "acts" },
-          el("button", {
-            class: "act primary", disabled: !!p.stale,
-            onclick: () => supersede(entry, other(p, entry.id), p),
-            title: p.stale || "保留这条，让另一条关闭有效期"
-          }, "保留这条"),
-          el("span", { class: "id" }, entry.id)));
+        el("div", { class: "hint" }, label + " · " + (CAT[entry.category] || entry.category)
+          + (chosen ? " · 模型倾向保留这条" : "") + " · " + entry.id),
+        entryHead(entry),
+        renderBody(entry));
     };
+
     return el("article", { class: "item" },
       el("div", { class: "meta" },
         badge(contested ? "矛盾" : "重复", contested ? "danger" : "ok"),
@@ -294,11 +412,14 @@ function renderProposals() {
         p.verified === false ? badge("证据未核实", "danger") : null,
         p.stale ? badge("不可应用：" + p.stale, "blocked") : null,
         el("span", {}, (p.detected_at || "").slice(0, 16).replace("T", " ") + " · " + (p.model || ""))),
-      el("div", { class: "pair" }, side(p.left, "A"), side(p.right, "B")),
+      basis,
       p.reason ? el("div", { class: "reason" }, p.reason) : null,
-      (p.claims || []).length ? el("ul", { class: "claims" },
-        p.claims.map(c => el("li", {}, (c.relation || "") + "：",
-          el("q", {}, c.quote_left || ""), " ↔ ", el("q", {}, c.quote_right || "")))) : null);
+      el("div", { class: "acts" }, keep(p.left, "A"), keep(p.right, "B")),
+      warn,
+      el("details", { class: "entries" },
+        el("summary", {}, "展开两条完整记忆（A " + (p.left ? p.left.chars : "?")
+          + " 字 / B " + (p.right ? p.right.chars : "?") + " 字）"),
+        el("div", { class: "pair" }, side(p.left, "A"), side(p.right, "B"))));
   }));
 }
 

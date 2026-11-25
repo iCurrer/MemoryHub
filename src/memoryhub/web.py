@@ -89,6 +89,63 @@ def load_page(token: str) -> str:
     return html.replace(TOKEN_PLACEHOLDER, token)
 
 
+# ---------------------------------------------------------------------- headline
+
+#: Longest headline before it is clipped. 48 characters is about one line at the
+#: page's column width; longer and the "scan one line per entry" property is lost.
+MAX_HEADLINE = 48
+
+_HEADING_RE = re.compile(r"^\s*#{1,6}\s+(.+?)\s*#*\s*$")
+_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$")
+
+
+def headline(entry: MemoryEntry) -> Dict[str, Any]:
+    """The one line you read while scanning a list -- **taken**, not written.
+
+    Every candidate is a substring of the entry, so a headline can never state
+    something the entry does not. That is the whole reason this is extraction
+    rather than summarisation: the project's only automated defence against
+    invention is "the model may copy, never compose" (ADR-016), and a generated
+    title would be the first place it gets violated -- in the most visible
+    position on the page.
+
+    What it gives up: a 401-character entry about a workbench reads as
+    "个人工作台「我的大四」", not as a sentence explaining what changed. That
+    sentence has to come from a synthesis layer (P3-03), which needs finer
+    evidence than these entries currently have. Until then, an honest label
+    beats a fluent guess.
+
+    ``skip`` is how many leading lines the headline consumed, so the body is not
+    shown with its own title repeated underneath it.
+    """
+    lines = entry.body.strip().splitlines()
+    for index, line in enumerate(lines):
+        match = _HEADING_RE.match(line)
+        if match:
+            return {"text": _clip(match.group(1)), "skip": index + 1}
+    for line in lines:
+        match = _BULLET_RE.match(line)
+        if match:
+            # Not skipped: a bullet's siblings are the rest of the list, and
+            # dropping the first one would leave the list starting mid-way.
+            return {"text": _clip(_plain(match.group(1))), "skip": 0}
+    first = next((line for line in lines if line.strip()), "")
+    return {"text": _clip(_plain(first)), "skip": 0}
+
+
+def _plain(text: str) -> str:
+    return text.replace("**", "").replace("`", "")
+
+
+def _clip(text: str, limit: int = MAX_HEADLINE) -> str:
+    text = re.sub(r"\s+", " ", _plain(text)).strip()
+    if len(text) <= limit:
+        # A trailing colon is the mark of "here comes the list"; as a headline it
+        # just dangles ("不要过度迎合，不做无条件赞同的 AI：").
+        return text.rstrip("：:")
+    return text[:limit].rstrip(" ，。、；：,;:") + "…"
+
+
 # --------------------------------------------------------------------- payloads
 
 
@@ -109,7 +166,9 @@ def entry_brief(entry: MemoryEntry) -> Dict[str, Any]:
         "supersedes": list(entry.supersedes),
         "tags": list(entry.tags),
         "chars": len(entry.body),
+        "lines": len(entry.body.strip().splitlines()),
         "crowded": is_crowded(entry),
+        "headline": headline(entry),
     }
 
 
@@ -339,10 +398,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
-            if not self._token_ok():
-                self._json(401, {"ok": False, "error": "链接里缺少 token，请用启动时打印的地址"})
-                return
-            self._send(200, load_page(self.app.token).encode("utf-8"), "text/html; charset=utf-8")
+            # The shell is served without a token on purpose. It contains no
+            # data -- every fact comes from /api/*, which still requires one.
+            # Refusing here made reloading the page a dead end: the script had
+            # rewritten the URL to drop ?t=, so F5 produced a page of raw 401
+            # JSON with no way back. Inject the token when the request proves
+            # it, leave the placeholder-derived empty string otherwise and let
+            # the page fall back to the token it kept in sessionStorage.
+            token = self.app.token if self._token_ok() else ""
+            self._send(
+                200, load_page(token).encode("utf-8"), "text/html; charset=utf-8"
+            )
             return
         if not self._token_ok():
             self._json(401, {"ok": False, "error": "缺少或错误的 token"})

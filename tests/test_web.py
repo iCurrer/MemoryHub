@@ -83,14 +83,22 @@ class ServerCase(unittest.TestCase):
 
 
 class AuthTests(ServerCase):
-    def test_page_needs_the_token(self) -> None:
+    def test_page_carries_the_token_only_when_the_request_proves_it(self) -> None:
         app = self.start()
-        status, _ = self.request("GET", "/")
-        self.assertEqual(status, 401)
         status, html = self.request("GET", f"/?t={app.token}")
         self.assertEqual(status, 200)
         self.assertIn(app.token, html)
         self.assertIn("MEMORYHUB", html)
+
+    def test_page_shell_loads_without_a_token_but_holds_no_secret(self) -> None:
+        # A reload used to be a dead end: the script rewrote the URL, and the
+        # server answered the tokenless request with 401 JSON. The shell is now
+        # always served; the token is what stays protected, not the layout.
+        app = self.start()
+        status, html = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertNotIn(app.token, html)
+        self.assertNotIn("__MEMORYHUB_TOKEN__", html, "占位符不能被原样送出")
 
     def test_api_needs_the_token(self) -> None:
         self.start()
@@ -339,6 +347,70 @@ class CrowdedTests(ServerCase):
         sides = {side["id"]: side["crowded"] for side in
                  (data["proposals"][0]["left"], data["proposals"][0]["right"])}
         self.assertEqual(sides, {short.id: False, long_one.id: True})
+
+
+class HeadlineTests(unittest.TestCase):
+    """The headline must be *taken* from the entry, never written.
+
+    A generated title would be the first place "the model may copy, never
+    compose" (ADR-016) gets broken -- in the most visible spot on the page. So
+    every assertion here is about substring-or-nothing, not about quality.
+    """
+
+    def heading_entry(self) -> MemoryEntry:
+        return MemoryEntry.create(
+            category="project",
+            body="## 十五、优先事项（2026-11-24 快照）\n\n1. 毕业论文：确定选题\n2. 求职：探索 AI 产品",
+        )
+
+    def test_markdown_heading_becomes_the_headline_and_is_skipped(self) -> None:
+        head = web.headline(self.heading_entry())
+        self.assertEqual(head["text"], "十五、优先事项（2026-11-24 快照）")
+        self.assertEqual(head["skip"], 1)
+
+    def test_a_bullet_is_used_but_not_skipped(self) -> None:
+        entry = MemoryEntry.create(
+            category="decision",
+            body="- **主线（2026.09 更新）：** 新道实习已结束，当前重心是备考。\n- **次线：** 别的事",
+        )
+        head = web.headline(entry)
+        self.assertTrue(head["text"].startswith("主线"))
+        self.assertEqual(head["skip"], 0, "跳过第一条会留下半截列表")
+
+    def test_plain_first_line_is_used_as_is(self) -> None:
+        entry = MemoryEntry.create(
+            category="project",
+            body="毕业论文：《基于多 Agent 架构的企业财务共享中心工作流程优化研究》",
+        )
+        self.assertIn("毕业论文", web.headline(entry)["text"])
+
+    def test_headline_never_exceeds_the_limit(self) -> None:
+        entry = MemoryEntry.create(category="knowledge", body="很长的一句话" * 40)
+        head = web.headline(entry)["text"]
+        self.assertLessEqual(len(head), web.MAX_HEADLINE + 1)
+        self.assertTrue(head.endswith("…"))
+
+    def test_headline_is_a_substring_of_what_it_came_from(self) -> None:
+        # The property that makes this safe: strip the ellipsis and the markdown
+        # emphasis, and what is left must literally appear in the body.
+        entry = MemoryEntry.create(
+            category="project",
+            body="### 个人工作台「我的大四」\n- 目录：D:/x\n- 使用偏好：本地优先\n",
+        )
+        head = web.headline(entry)["text"]
+        self.assertIn(head.rstrip("…"), entry.body.replace("**", ""))
+
+    def test_short_entry_has_a_headline_too(self) -> None:
+        # The page hides it below 60 chars (the body is the headline), but the
+        # payload always carries one so callers need no special case.
+        entry = MemoryEntry.create(category="knowledge", body="短句。")
+        self.assertEqual(web.headline(entry)["text"], "短句。")
+
+    def test_payload_carries_headline_and_line_count(self) -> None:
+        entry = self.heading_entry()
+        brief = web.entry_brief(entry)
+        self.assertEqual(brief["headline"]["skip"], 1)
+        self.assertEqual(brief["lines"], len(entry.body.strip().splitlines()))
 
 
 if __name__ == "__main__":
