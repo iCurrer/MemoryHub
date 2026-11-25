@@ -21,7 +21,7 @@
 | 本地路径 | `D:/project/MemoryHub` |
 | 远端 | `origin → https://github.com/iCurrer/MemoryHub.git`（**公开仓**） |
 | 分支 | `main` |
-| 提交 | 30（2026-11-25 曾对全部历史做一次提交信息改写；随后删除并重建远端仓，旧对象已不存在） |
+| 提交 | 34（2026-11-25 曾对全部历史做一次提交信息改写；随后删除并重建远端仓，旧对象已不存在） |
 | 数据目录 | `D:/my-memory`（已创建，59 条：53 pending + 6 archived，**自身独立 git 仓、无远端**） |
 | 运行时依赖 | **`pyyaml>=6.0`、`mcp>=2.0,<3`**（后者连带 pydantic/starlette/uvicorn 等，见 ADR-012） |
 
