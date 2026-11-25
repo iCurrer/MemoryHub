@@ -42,7 +42,7 @@ from memoryhub.ai import (  # noqa: E402
     parse_verdict,
 )
 from memoryhub.ai.claims import Candidate, collect  # noqa: E402
-from memoryhub.ai.conflict import looks_mixed  # noqa: E402
+from memoryhub.ai.conflict import looks_mixed, unactionable  # noqa: E402
 from memoryhub.cli import main  # noqa: E402
 from memoryhub.models import MemoryEntry, ValidationError  # noqa: E402
 from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
@@ -339,6 +339,27 @@ class AggregateTests(unittest.TestCase):
 # ------------------------------------------------------------------- detect
 
 
+class UnactionableTests(unittest.TestCase):
+    """No proposal is emitted when the only write that could apply it loses data."""
+
+    def test_a_partial_duplicate_never_becomes_a_proposal(self) -> None:
+        # The real pair from the vault: a 6-line 技术偏好 entry and a 6-line
+        # 身份 entry that share 「喜欢通过实际项目学习」. The overlap is real, the
+        # remedy is not -- archiving either entry hides five unrelated facts.
+        self.assertTrue(unactionable("duplicate", "partial"))
+
+    def test_a_whole_duplicate_still_needs_a_decision(self) -> None:
+        self.assertIsNone(unactionable("duplicate", "whole"))
+
+    def test_a_partial_conflict_stays_actionable(self) -> None:
+        # The paper-title case: one clause disagrees inside a long entry, and
+        # "keep the settled title" is a choice a reader can actually make.
+        self.assertIsNone(unactionable("contradicts", "partial"))
+
+    def test_supersede_is_never_filtered(self) -> None:
+        self.assertIsNone(unactionable("supersede", "partial"))
+
+
 class DetectTests(unittest.TestCase):
     def entries(self):
         return [_entry(ID_A, OLD_TITLE), _entry(ID_B, NEW_TITLE)]
@@ -359,6 +380,57 @@ class DetectTests(unittest.TestCase):
     def test_a_single_entry_never_calls_the_model(self) -> None:
         provider = _provider({"relation": "none"})
         self.assertEqual(detect([_entry(ID_A, OLD_TITLE)], provider).calls, 0)
+
+    def test_a_partial_duplicate_is_reported_but_not_turned_into_a_proposal(self) -> None:
+        # One shared sentence out of two: the model is right that they overlap,
+        # and the module still refuses to ask a question whose only answer
+        # archives a whole memory.
+        shared = "喜欢通过实际项目学习"
+        entries = [
+            _entry(ID_A, shared + "。生日 1 月 8 日。"),
+            _entry(ID_B, shared + "。"),
+        ]
+        answer = {
+            "relation": "duplicate",
+            "quote_a": shared,
+            "quote_b": shared,
+            "reason": "同一句偏好",
+        }
+        provider = _provider(answer)
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            result = detect(entries, provider, max_pairs=1)
+        self.assertEqual(result.pairs, [])
+        self.assertEqual(len(result.suppressed), 1)
+        self.assertIn("整条归档", result.suppressed[0])
+
+    def test_a_whole_duplicate_still_reaches_the_reader(self) -> None:
+        shared = "喜欢通过实际项目学习"
+        entries = [_entry(ID_A, shared + "。"), _entry(ID_B, shared + "。")]
+        answer = {
+            "relation": "duplicate",
+            "quote_a": shared,
+            "quote_b": shared,
+            "reason": "同一句偏好",
+        }
+        provider = _provider(answer)
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            result = detect(entries, provider, max_pairs=1)
+        self.assertEqual(len(result.pairs), 1)
+        self.assertEqual(result.pairs[0].scope, "whole")
+        self.assertEqual(result.suppressed, [])
+
+    def test_a_pair_the_human_called_unrelated_is_not_sent_again(self) -> None:
+        transport = ScriptedTransport(SUPERSEDE_ANSWER)
+        provider = Provider(
+            AIConfig(base_url="https://example.test/v1", model="fake"), transport=transport
+        )
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            result = detect(
+                self.entries(), provider, max_pairs=1, skip_pairs=[(ID_A, ID_B)]
+            )
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(result.calls, 0)
+        self.assertEqual(result.pairs, [])
 
     def test_the_planned_hook_can_cancel_before_spending_anything(self) -> None:
         seen = {}

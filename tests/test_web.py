@@ -308,6 +308,61 @@ class ProposalTests(ServerCase):
         record = json.loads(resolved[0].read_text(encoding="utf-8"))
         self.assertEqual(record["resolution"]["keep"], newer.id)
 
+    def test_dismiss_closes_the_question_and_leaves_both_entries_alone(self) -> None:
+        # The bug this exists for: two unrelated entries got paired because they
+        # shared one sentence, and the only two buttons archived a whole memory
+        # each. Saying "these two are unrelated" must cost nothing.
+        app = self.start()
+        older, newer = self._propose()
+        status, data = self.request(
+            "POST",
+            "/api/dismiss",
+            {"left": older.id, "right": newer.id},
+            token=app.token,
+        )
+        self.assertEqual(status, 200, data)
+        for entry_id in (older.id, newer.id):
+            entry = self.store.get(entry_id)
+            self.assertEqual(entry.status, "approved")
+            self.assertEqual(entry.superseded_by, None)
+            self.assertEqual(entry.supersedes, [])
+        self.assertFalse(conflicts.find_record(self.root, older.id, newer.id))
+        closed = json.loads(
+            next((self.root / "logs" / "conflicts").glob("*.json")).read_text(encoding="utf-8")
+        )
+        self.assertEqual(closed["resolution"]["verdict"], "unrelated")
+        # And the pair is not asked about again while the bodies are unchanged.
+        self.assertEqual(
+            {tuple(sorted(pair)) for pair in conflicts.dismissed_pairs(self.root)},
+            {tuple(sorted((older.id, newer.id)))},
+        )
+
+    def test_dismiss_an_already_closed_pair_is_404_not_a_second_write(self) -> None:
+        app = self.start()
+        older, newer = self._propose()
+        self.request(
+            "POST", "/api/dismiss", {"left": older.id, "right": newer.id}, token=app.token
+        )
+        status, _data = self.request(
+            "POST", "/api/dismiss", {"left": older.id, "right": newer.id}, token=app.token
+        )
+        self.assertEqual(status, 404)
+
+    def test_read_only_refuses_dismiss_too(self) -> None:
+        app = self.start(allow_write=False)
+        older, newer = self._propose()
+        status, data = self.request(
+            "POST", "/api/dismiss", {"left": older.id, "right": newer.id}, token=app.token
+        )
+        self.assertEqual(status, 403, data)
+        self.assertTrue(conflicts.find_record(self.root, older.id, newer.id))
+
+    def test_the_page_offers_a_way_out_of_a_wrong_pair(self) -> None:
+        self.start()
+        _status, page = self.request("GET", "/")
+        self.assertIn("/api/dismiss", page)
+        self.assertIn("无关，别再问", page)
+
     def test_supersede_refuses_a_retired_replacement(self) -> None:
         # Reversing a decision is not a second supersede: the retired side is no
         # longer approved, and the store says so instead of silently rewriting

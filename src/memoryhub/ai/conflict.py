@@ -94,6 +94,29 @@ MAX_REASON_CHARS = 400
 #: endpoint. Continuing would burn one doomed request per candidate.
 FAILURE_BUDGET = 3
 
+
+def unactionable(relation: str, scope: str) -> Optional[str]:
+    """Why this proposal must not reach a reader, or ``None`` if it should.
+
+    A ``duplicate`` that only overlaps in *some* claims is not actionable,
+    because the one write this project has is ``supersede`` -- archive the whole
+    entry. A 6-line 技术偏好 entry and a 6-line 身份 entry that share the single
+    sentence 「喜欢通过实际项目学习」 were reported as duplicates of each other;
+    acting on that would retire five unrelated facts to remove one repeated
+    sentence. The overlap is real. The proposed remedy just does not exist.
+
+    So the rule is about the *remedy*, not about the model: no proposal is
+    emitted when the only way to apply it loses data. Redundancy is cheap;
+    a wrong merge is not. The same predicate is used to prune proposals written
+    before this rule existed (``memoryhub conflicts --prune``), because a rule
+    that only applies to future output leaves the existing queue just as
+    unanswerable.
+    """
+    if relation == "duplicate" and scope != "whole":
+        return "只有一段重叠，而唯一的写法是整条归档——会连带隐藏别的内容"
+    return None
+
+
 JUDGE_SYSTEM = """\
 你在核对同一个人的记忆库里，两段内容是否互相矛盾。
 
@@ -216,6 +239,10 @@ class ConflictResult:
     stats: PairingStats = field(default_factory=PairingStats)
     calls: int = 0
     chars_sent: int = 0
+    #: Pairs the model reported and this module refused to turn into a
+    #: proposal, with the reason. Reported, never silent: "the model found 12
+    #: things and you are being shown 3" is information the reader needs.
+    suppressed: List[str] = field(default_factory=list)
 
     @property
     def unverified(self) -> int:
@@ -467,10 +494,15 @@ def detect(
     *,
     max_pairs: int = DEFAULT_MAX_PAIRS,
     per_entry_pair: int = PER_ENTRY_PAIR,
+    skip_pairs: Sequence[Tuple[str, str]] = (),
     on_progress=None,
     on_planned=None,
 ) -> ConflictResult:
     """Pair claims, then ask the model about each pair separately.
+
+    ``skip_pairs`` are entry pairs a human already dismissed as unrelated. They
+    are skipped before the call -- re-asking a question that was answered costs
+    money and teaches the reader to ignore the queue.
 
     ``on_planned(stats, count)`` runs after pairing and before the first call --
     the CLI uses it to print what the run costs and to ask for confirmation, so a
@@ -486,6 +518,14 @@ def detect(
 
     claims = collect(entries)
     chosen, stats = candidates(claims, limit=max_pairs, per_entry_pair=per_entry_pair)
+    if skip_pairs:
+        skip = {tuple(sorted(pair)) for pair in skip_pairs}
+        chosen = [
+            candidate
+            for candidate in chosen
+            if tuple(sorted((candidate.left.entry_id, candidate.right.entry_id)))
+            not in skip
+        ]
     result.stats = stats
     if not chosen:
         return result
@@ -534,6 +574,14 @@ def detect(
             on_progress(index, len(chosen), verdict)
 
     result.pairs = aggregate(result.verdicts, claim_counts)
+    kept: List[ConflictPair] = []
+    for pair in result.pairs:
+        why = unactionable(pair.relation, pair.scope)
+        if why is not None:
+            result.suppressed.append(f"{pair.a} / {pair.b}: {why}")
+            continue
+        kept.append(pair)
+    result.pairs = kept
     return result
 
 

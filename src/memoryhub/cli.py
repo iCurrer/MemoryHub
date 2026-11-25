@@ -32,7 +32,7 @@ from .ai import (
     looks_mixed,
     organize,
 )
-from .ai.conflict import RELATION_LABELS
+from .ai.conflict import RELATION_LABELS, unactionable
 from .backup import (
     GitUnavailable,
     HistoryUnavailable,
@@ -797,13 +797,75 @@ def _record_line(store: VaultStore, record: dict) -> list:
 
 
 def cmd_conflicts(args: argparse.Namespace) -> int:
-    """Inspect, or generate, conflict proposals (P3-05)."""
+    """Inspect, generate, or clear out conflict proposals (P3-05, ADR-023)."""
     store = _store(args)
+    if args.prune:
+        return _conflicts_prune(store, args)
     if args.show:
         return _conflicts_show(store, args)
     if args.ai:
         return _conflicts_detect(store, args)
     return _conflicts_list(store)
+
+
+def _conflicts_prune(store: VaultStore, args: argparse.Namespace) -> int:
+    """Close proposals the current rule would never have produced.
+
+    A rule that only governs future output leaves the existing queue exactly as
+    unanswerable as it was. These proposals were written when a one-sentence
+    overlap was enough to pair two unrelated entries; the only exit at the time
+    was archiving one of them, so nobody cleared them. Dismissing is not a
+    supersede: nothing in the vault changes, the files move to ``logs/``.
+    """
+    records, problems = conflicts.load_records(store.root)
+    for problem in problems:
+        print(f"warning: {problem}", file=sys.stderr)
+    victims = []
+    for record in records:
+        why = unactionable(str(record.get("relation") or ""), str(record.get("scope") or ""))
+        if why is not None:
+            victims.append((record, why))
+    if not victims:
+        print(f"没有需要清理的提案（{len(records)} 条都还会再产生一次）。")
+        return 0
+
+    for record, why in victims:
+        pair = record.get("pair") or ["?", "?"]
+        print(f"{RELATION_LABELS.get(str(record.get('relation')), record.get('relation'))}  "
+              f"{pair[0]}  {pair[1]}")
+        print(f"    关闭原因：{why}")
+
+    print()
+    print(f"{len(victims)} 条提案会被关闭（移到 logs/conflicts/，两条记忆都不动）。")
+    if getattr(args, "dry_run", False):
+        print("dry run：没有移动任何文件。")
+        return 0
+    if not getattr(args, "yes", False):
+        if not sys.stdin.isatty():
+            print("error: 需要确认。非交互环境下加 --yes。", file=sys.stderr)
+            return 1
+        if input("继续？[y/N] ").strip().lower() not in ("y", "yes"):
+            print("已取消，什么都没动。")
+            return 1
+
+    closed = 0
+    for record, _ in victims:
+        pair = record.get("pair") or []
+        moved = conflicts.dismiss_record(
+            store.root, str(pair[0]), str(pair[1]), note="prune:unactionable"
+        )
+        if moved is not None:
+            closed += 1
+        else:
+            # Named something other than the pair: `find_record` cannot reach it,
+            # so neither can this command. Saying so beats a count that quietly
+            # does not add up.
+            print(
+                f"warning: {pair[0]} / {pair[1]} 的文件不在预期路径，未关闭",
+                file=sys.stderr,
+            )
+    print(f"已关闭 {closed} 条，仍开着 {len(records) - closed} 条。")
+    return 0
 
 
 def _conflicts_list(store: VaultStore) -> int:
@@ -910,12 +972,17 @@ def _conflicts_detect(store: VaultStore, args: argparse.Namespace) -> int:
         sys.stdout.flush()
 
     provider = Provider(cfg)
+    skip_pairs = conflicts.dismissed_pairs(store.root)
+    if skip_pairs:
+        print(f"  跳过  {len(skip_pairs)} 个你说过无关的条目对（内容没改过就不再问）")
+        print()
     try:
         result = detect(
             pool,
             provider,
             max_pairs=args.max_pairs,
             per_entry_pair=args.per_pair,
+            skip_pairs=skip_pairs,
             on_progress=progress,
             on_planned=planned,
         )
@@ -941,6 +1008,15 @@ def _conflicts_detect(store: VaultStore, args: argparse.Namespace) -> int:
         f"{len(result.verdicts) - sum(1 for v in result.verdicts if v.relation == 'none')} 段对判为有关系，"
         f"合并成 {len(result.pairs)} 个条目对"
     )
+    if result.suppressed:
+        print(
+            f"{len(result.suppressed)} 段对确实重叠，但没有写成提案"
+            "（只有一部分片段重复，唯一的写法是整条归档——那会连带藏掉别的内容）："
+        )
+        for line in result.suppressed[:5]:
+            print(f"  - {line}")
+        if len(result.suppressed) > 5:
+            print(f"  ... 其余 {len(result.suppressed) - 5} 条省略")
     if not result.pairs:
         print(
             "模型没有报告冲突。这不等于库里没有矛盾——它只看了上面列出的那些段对。"
@@ -2005,6 +2081,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--ai", action="store_true", help="run the model over the approved entries"
     )
     p_conf.add_argument("--show", metavar="ID", default=None, help="detail for one entry")
+    p_conf.add_argument(
+        "--prune",
+        action="store_true",
+        help="close proposals that only overlap in part of an entry (vault untouched)",
+    )
     p_conf.add_argument("--category", choices=CATEGORIES, default=None)
     p_conf.add_argument(
         "--max-pairs",

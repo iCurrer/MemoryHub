@@ -21,6 +21,7 @@ thing this project keeps (ADR-006: 旧结论不删除，关闭有效期并建立
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -98,19 +99,13 @@ def find_record(root: Path, a: str, b: str) -> Optional[Path]:
     return path if path.is_file() else None
 
 
-def resolve_record(
-    root: Path,
-    a: str,
-    b: str,
-    *,
-    keep: str,
-    retired: str,
-    note: str = "",
+def _close_record(
+    root: Path, a: str, b: str, resolution: Dict[str, object]
 ) -> Optional[Path]:
-    """Move an applied proposal to ``logs/`` with the decision recorded.
+    """Move one proposal to ``logs/`` with the decision appended to it.
 
-    Returns ``None`` when there was no proposal on disk (a human can supersede
-    without ever running detection -- that path must not depend on a file).
+    Returns ``None`` when there is no proposal on disk -- both callers must
+    work without one (a human can supersede a pair detection never saw).
     """
     path = find_record(root, a, b)
     if path is None:
@@ -121,12 +116,7 @@ def resolve_record(
         record = {}
     if not isinstance(record, dict):
         record = {}
-    record["resolution"] = {
-        "keep": keep,
-        "superseded": retired,
-        "note": note,
-        "resolved_at": now_iso(),
-    }
+    record["resolution"] = resolution
 
     target = Path(root).joinpath(*RESOLVED_DIR) / path.name
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -135,6 +125,112 @@ def resolve_record(
     )
     path.unlink(missing_ok=True)
     return target
+
+
+def resolve_record(
+    root: Path,
+    a: str,
+    b: str,
+    *,
+    keep: str,
+    retired: str,
+    note: str = "",
+) -> Optional[Path]:
+    """Close a proposal that was actually applied to the vault."""
+    return _close_record(
+        root,
+        a,
+        b,
+        {
+            "verdict": "superseded",
+            "keep": keep,
+            "superseded": retired,
+            "note": note,
+            "resolved_at": now_iso(),
+        },
+    )
+
+
+def dismiss_record(
+    root: Path, a: str, b: str, *, note: str = ""
+) -> Optional[Path]:
+    """Close a proposal without touching either memory (ADR-023).
+
+    Why this exists: the only other exits from a proposal were the two
+    ``supersede`` calls, and *both* of them archive a whole entry. So when the
+    detector paired two unrelated entries -- a 6-line 技术偏好 entry and a
+    6-line 身份 entry that share one cliché sentence -- the reader had no way to
+    say "these two have nothing to do with each other" except by picking a
+    memory to lose. That is not a choice; it is a trap with two buttons.
+
+    A dismissed proposal is still a decision, so it moves to ``logs/conflicts/``
+    with ``verdict: unrelated`` rather than being deleted. The hashes of the two
+    bodies are stored with it: detection is a pure function of (entries, model,
+    prompt) and would reproduce the same pair next run, but only for the same
+    two texts. If either body is edited afterwards, the pair is a new question
+    and gets asked again.
+    """
+    return _close_record(
+        root,
+        a,
+        b,
+        {
+            "verdict": "unrelated",
+            "note": note,
+            "bodies": {entry_id: _body_hash(_entry_body(root, entry_id)) for entry_id in (a, b)},
+            "resolved_at": now_iso(),
+        },
+    )
+
+
+def _entry_body(root: Path, entry_id: str) -> str:
+    from .storage.markdown_store import VaultStore  # local: keep import graph small
+
+    entry = VaultStore(Path(root)).get(entry_id)
+    return entry.body if entry is not None else ""
+
+
+def _body_hash(text: str) -> str:
+    """Same shape as ``summary.body_hash``: a freshness check, not a boundary."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def dismissed_pairs(root: Path) -> List[Tuple[str, str]]:
+    """Pairs a human already said are unrelated, still worth skipping.
+
+    A pair is skipped only while both bodies are byte-identical to the ones that
+    were dismissed. Two entries that were unrelated can become related after an
+    edit, and silently honouring the old verdict would hide exactly the conflict
+    that the edit created.
+    """
+    keys: List[Tuple[str, str]] = []
+    directory = Path(root).joinpath(*RESOLVED_DIR)
+    if not directory.is_dir():
+        return keys
+    for path in sorted(directory.glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        resolution = record.get("resolution")
+        if not isinstance(resolution, dict) or resolution.get("verdict") != "unrelated":
+            continue
+        pair = record.get("pair")
+        if not isinstance(pair, list) or len(pair) != 2:
+            continue
+        hashes = resolution.get("bodies")
+        if isinstance(hashes, dict):
+            same = all(
+                hashes.get(str(entry_id)) == _body_hash(_entry_body(root, str(entry_id)))
+                for entry_id in pair
+            )
+            if not same:
+                # Edited since the dismissal: a different question now.
+                continue
+        keys.append(tuple(sorted((str(pair[0]), str(pair[1])))))  # type: ignore[arg-type]
+    return keys
 
 
 # ------------------------------------------------------------------ the write

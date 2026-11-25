@@ -302,10 +302,14 @@ function entryCard(entry, opts) {
 
 function proposalCard(p) {
   const contested = p.relation === "contradicts";
+  //: `partial` means only some sentences of an entry are involved. The card must
+  //: say so, because the two buttons below act on the *whole* entry.
+  const partial = p.scope === "partial";
   const claims = (p.claims || []).filter(c => c.quote_left || c.quote_right);
   const card = el("article", { class: "card todo" },
     el("div", { class: "meta" },
-      chip(contested ? "两条说法冲突" : "两条在说同一件事", contested ? "warn" : "ok"),
+      chip(contested ? "两条说法冲突" : "两条有重叠", contested ? "warn" : "ok"),
+      partial ? chip("只有一句重叠", "warn") : null,
       el("span", {}, (p.detected_at || "").slice(0, 10))));
 
   // The evidence, not the entries: 44 characters against 382 characters is
@@ -320,6 +324,11 @@ function proposalCard(p) {
     card.append(el("div", { class: "warn" }, "这条提案没有引文证据，只剩模型的结论。展开原文再看。"));
   }
   if (p.reason) card.append(el("div", { class: "note" }, p.reason));
+  if (partial) {
+    card.append(el("div", { class: "note" },
+      "只有一句重叠，两条其余内容各说各的。下面两个按钮归档的是整条记忆，"
+      + "会把不重叠的部分一起藏起来。"));
+  }
 
   const keep = (entry, label) => {
     if (!entry) return null;
@@ -327,8 +336,16 @@ function proposalCard(p) {
     twoStep(b, "留 " + label, "确定留 " + label + "？", () => supersede(entry, other(p, entry.id), p));
     return b;
   };
+  const unclear = el("button", { class: "act no", title: "两条记忆都不动，只是不再问这一对" });
+  //: One click, deliberately. Every other action here changes the vault and
+  //: therefore arms first; this one changes nothing in the vault. Putting a
+  //: confirmation in front of the *exit* is how the trap got built.
+  unclear.textContent = "无关，别再问";
+  unclear.addEventListener("click", () => dismissProposal(p));
   const crowded = [p.left, p.right].filter(e => e && e.crowded);
-  card.append(el("div", { class: "acts" }, keep(p.left, "A"), keep(p.right, "B"), el("span", { class: "gap" }),
+  card.append(el("div", { class: "acts" }, keep(p.left, "A"), keep(p.right, "B"),
+    el("span", { class: "gap" }), unclear,
+    el("span", { class: "gap" }),
     el("span", { class: "id" }, (p.left ? p.left.chars : "?") + " 字 / " + (p.right ? p.right.chars : "?") + " 字")));
   if (crowded.length) {
     card.append(el("div", { class: "warn" },
@@ -421,6 +438,21 @@ async function decide(entry, action, category) {
       state.pending = state.pending.filter(e => e.id !== entry.id);
       toast(action === "approve" ? "已留下，从现在起每个 AI 都能读到" : "已丢掉，文件还在 inbox/rejected");
     }
+    renderFeed();
+    await reload({ keepLists: true });
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function dismissProposal(p) {
+  // Closes the *question*, not a memory. Neither entry changes; the record moves
+  // to logs/conflicts/ with verdict "unrelated" so the same two bodies are not
+  // asked about again.
+  try {
+    await api("/api/dismiss", { left: p.left_id, right: p.right_id });
+    state.proposals = state.proposals.filter(item => item !== p);
+    toast("已关闭这条提案，两条记忆都没动");
     renderFeed();
     await reload({ keepLists: true });
   } catch (err) {

@@ -253,7 +253,7 @@ def entry_brief(
 
 
 class App:
-    """The read models and the four write actions, minus HTTP."""
+    """The read models and the five write actions, minus HTTP."""
 
     def __init__(self, store: VaultStore, token: str, *, allow_write: bool = True):
         self.store = store
@@ -399,6 +399,23 @@ class App:
                 raise HTTPError(400, f"未知动作：{action}")
         fresh = self.store.get(entry_id)
         return {"ok": True, "entry": entry_brief(fresh) if fresh else None}
+
+    def dismiss(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Say "these two have nothing to do with each other" -- vault untouched.
+
+        This is the third answer to a proposal, and without it the page offered
+        only two: archive A or archive B. A wrong pair therefore cost a memory.
+        """
+        self._require_write()
+        left = str(payload.get("left") or "")
+        right = str(payload.get("right") or "")
+        with _WRITE_LOCK:
+            moved = conflicts.dismiss_record(self.store.root, left, right)
+        if moved is None:
+            raise HTTPError(
+                404, "这条提案已经不在队列里了（另一次刷新可能已经处理过）"
+            )
+        return {"ok": True, "closed": str(moved)}
 
     def supersede(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._require_write()
@@ -564,6 +581,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.app.review(payload))
             elif path == "/api/supersede":
                 self._json(200, self.app.supersede(payload))
+            elif path == "/api/dismiss":
+                self._json(200, self.app.dismiss(payload))
             else:
                 self._json(404, {"ok": False, "error": "没有这个地址"})
         except HTTPError as exc:

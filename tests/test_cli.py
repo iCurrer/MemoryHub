@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -444,6 +445,68 @@ class CliTests(unittest.TestCase):
         self.assertIn("[ai]", text)
         self.assertIn("https://example.test/v1", text)
         self.assertIn('vault = "', text)
+
+
+    # ------------------------------------------------------- conflicts --prune
+
+    def _write_proposal(self, suffix: str, relation: str, scope: str) -> Path:
+        """One proposal, named the way ``save_record`` names them.
+
+        The name encodes the pair, and that is the whole lookup key: a file the
+        page cannot find by (left, right) is a file nobody can close.
+        """
+        left = f"mem_20261124T205154_{suffix}a"
+        right = f"mem_20261124T205154_{suffix}b"
+        directory = self.vault / "inbox" / "conflicts"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{left}__{right}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "pair": [left, right],
+                    "relation": relation,
+                    "scope": scope,
+                    "verified": True,
+                    "detected_at": "2026-11-25T19:00:00+08:00",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_prune_closes_only_the_proposals_no_write_could_have_applied(self) -> None:
+        # A rule that only governs future output leaves the existing queue just
+        # as unanswerable -- so the old records have to be re-judged too.
+        self.init_vault()
+        bogus = self._write_proposal("aaaaaaaa", "duplicate", "partial")
+        real = self._write_proposal("cccccccc", "contradicts", "partial")
+
+        code, out, err = self.run_cli(
+            "conflicts", "--prune", "--dry-run", "--vault", str(self.vault)
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("关闭原因", out)
+        self.assertTrue(bogus.exists())
+
+        code, out, err = self.run_cli(
+            "conflicts", "--prune", "--yes", "--vault", str(self.vault)
+        )
+        self.assertEqual(code, 0, err)
+        self.assertFalse(bogus.exists())
+        self.assertTrue(real.exists())
+        closed = json.loads(
+            next((self.vault / "logs" / "conflicts").glob("*.json")).read_text(encoding="utf-8")
+        )
+        self.assertEqual(closed["resolution"]["verdict"], "unrelated")
+
+    def test_prune_without_yes_and_without_a_terminal_refuses(self) -> None:
+        self.init_vault()
+        bogus = self._write_proposal("aaaaaaaa", "duplicate", "partial")
+        code, _out, err = self.run_cli("conflicts", "--prune", "--vault", str(self.vault))
+        self.assertEqual(code, 1)
+        self.assertIn("--yes", err)
+        self.assertTrue(bogus.exists())
 
 
 if __name__ == "__main__":
