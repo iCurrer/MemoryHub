@@ -39,15 +39,18 @@ from . import managed
 from .models import MemoryEntry, now_iso
 
 #: Reading order in the rendered block. Profile first: a model that reads only
-#: the top of the block should still know who it is talking to.
-CATEGORY_ORDER = ("profile", "decision", "preference", "project", "fact")
+#: the top of the block should still know who it is talking to. Must stay a
+#: permutation of ``models.CATEGORIES`` -- a name here that the model layer does
+#: not know (``fact`` was one until 2026-11-25) silently demotes every entry of
+#: the missing category to the tail of the block under an untranslated heading.
+CATEGORY_ORDER = ("profile", "decision", "preference", "project", "knowledge")
 
 CATEGORY_LABELS = {
     "profile": "身份与档案",
     "decision": "决定与铁律",
     "preference": "偏好",
     "project": "项目",
-    "fact": "事实",
+    "knowledge": "知识",
 }
 
 #: Long entries are not truncated -- dropping the tail of a memory is worse than

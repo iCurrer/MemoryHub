@@ -1165,6 +1165,24 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Open the local page for the two queues (P6-03, pulled forward).
+
+    Bound to loopback only. There is no ``--host``: a page that can approve
+    memories has no business listening on an interface other machines can reach,
+    and "just for a moment" is how that happens.
+    """
+    from . import web
+
+    web.serve(
+        _store(args),
+        port=args.port,
+        allow_write=not args.read_only,
+        open_browser=not args.no_browser,
+    )
+    return 0
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Summarise what changed in the vault, from its own git history (P4-03)."""
     store = _store(args)
@@ -1705,6 +1723,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--list", action="store_true", help="only list the target paths")
     p_sync.set_defaults(func=cmd_sync)
 
+    p_serve = sub.add_parser(
+        "serve",
+        parents=[vault_arg],
+        help="open a local page for the review queue and conflict proposals (P6-03)",
+    )
+    p_serve.add_argument(
+        "--port", type=int, default=8765, help="port on 127.0.0.1 (default 8765, 0 = pick one)"
+    )
+    p_serve.add_argument(
+        "--read-only",
+        action="store_true",
+        help="serve the queues without letting the page change status",
+    )
+    p_serve.add_argument(
+        "--no-browser", action="store_true", help="do not open the browser automatically"
+    )
+    p_serve.set_defaults(func=cmd_serve)
+
     p_list = sub.add_parser("list", parents=[vault_arg], help="list memories")
     p_list.add_argument("--status", choices=STATUSES, default=None)
     p_list.add_argument("--category", choices=CATEGORIES, default=None)
@@ -1841,7 +1877,7 @@ def build_parser() -> argparse.ArgumentParser:
     #: complicated -- see docs/04-classify-audit.md for what the code actually is.
     #: ``_choices_actions`` is the table argparse renders for subcommands; entries
     #: are removed in place (not help=SUPPRESS, which prints the literal word).
-    mainline = {"init", "import", "scan", "approve", "review", "sync", "mcp", "doctor"}
+    mainline = {"init", "import", "scan", "approve", "review", "sync", "serve", "mcp", "doctor"}
     sub._choices_actions[:] = [
         action for action in sub._choices_actions if action.dest in mainline
     ]

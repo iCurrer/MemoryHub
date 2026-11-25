@@ -94,7 +94,7 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 > **2026-11-25 判定层已重做**：比较单位从「条目」降到「片段」，一次调用只判一对（无关条目物理上不在
 > 请求里，所以不可能被稀释），并新增「主题锚点」通道召回只共享高频词的那类冲突。真实库实测 120 次调用
-> 产出 24 条提案（22 重复 / 2 矛盾），全部带可定位的逐字证据。**但 4,803 个片段对只送审 120 个（2.5%）**，
+> 产出 24 条提案（20 重复 / 4 矛盾），全部带可定位的逐字证据。**但 4,803 个片段对只送审 120 个（2.5%）**，
 > 命令会把每个数字都打出来 ——「没有冲突」只对送审的那批成立。见 ADR-018。
 
 **回写分发（P5-06）**
@@ -116,9 +116,18 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
   不按客户端身份 —— MCP 的 `clientInfo` 是自报且无认证的，按它分级只是安全剧场
 - 没有 `memory_write` —— **任何级别**都无法直接把内容写进正式库
 
+**本机页面（P6-03）**
+
+- `memoryhub serve` 起一个本地页面，把**两个队列**摆出来：待审条目、冲突提案；外加回写计划的总览
+- 只绑 `127.0.0.1`，没有 `--host`；校验 `Host` 头（防 DNS rebinding）；每次启动一枚随机 token，走 header 不走 cookie
+- 标准库 `http.server` + 单文件 HTML，**不加依赖、没有构建步骤**，页面里没有任何外部链接
+- 写操作调的是 CLI 同一批函数（`set_status` / `apply_supersede`），所以 `blocked` 硬拒绝与取代链四道闸原样生效
+- `sync --write` 不在页面里：它改的是别的工具每次会话都要加载的文件
+- 长条目在「保留这条」旁单独告警 —— 401 字的混装条目被取代，会连带藏掉其它三件事
+
 **其他**
 
-- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `sync` `list` `show` `search` `approve` `reject` `review` `conflicts` `supersede` `sensitivity` `backup` `stats`
+- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `sync` `serve` `list` `show` `search` `approve` `reject` `review` `conflicts` `supersede` `sensitivity` `backup` `stats`
 - **索引**：SQLite FTS5 + trigram，中文可检索；删掉 `database/index.db` 会自动重建，结果不变
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目

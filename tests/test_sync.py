@@ -277,5 +277,26 @@ class SyncCliTests(unittest.TestCase):
         self.assertIn("CLAUDE.md", out)
 
 
+class CategoryTableTests(unittest.TestCase):
+    """The block's grouping table must track ``models.CATEGORIES``.
+
+    It drifted once: ``CATEGORY_ORDER`` still said ``fact`` after the model layer
+    renamed that category to ``knowledge``. Nothing failed -- the entries simply
+    fell to the tail of every written block under an untranslated heading. A
+    silent demotion in the file three AIs read is exactly the kind of thing that
+    needs a test rather than a comment.
+    """
+
+    def test_order_is_a_permutation_of_the_model_categories(self) -> None:
+        from memoryhub.models import CATEGORIES
+
+        self.assertEqual(set(sync.CATEGORY_ORDER), set(CATEGORIES))
+        self.assertEqual(len(sync.CATEGORY_ORDER), len(set(sync.CATEGORY_ORDER)))
+
+    def test_every_category_has_a_label(self) -> None:
+        for category in sync.CATEGORY_ORDER:
+            self.assertIn(category, sync.CATEGORY_LABELS)
+
+
 if __name__ == "__main__":
     unittest.main()
