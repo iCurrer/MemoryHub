@@ -1,4 +1,4 @@
-"""AI-assisted organisation (phase 3, P3-01/P3-02/P3-03).
+"""AI-assisted organisation (phase 3, P3-01/P3-02/P3-03/P3-05).
 
 Why this package exists at all: the rule-based splitter and classifier measured
 54.7% on the real vault, 7.7% whenever no keyword fired (``docs/04-classify-audit.md``). Splitting a memory into
@@ -22,6 +22,15 @@ invent a plausible memory and the next AI will read it as fact.
 
 from __future__ import annotations
 
+from .conflict import (
+    RELATIONS,
+    ConflictPair,
+    ConflictResult,
+    detect,
+    looks_mixed,
+    parse_conflicts,
+    pack,
+)
 from .organize import organize, OrganizeResult
 from .provider import AIConfig, AIError, Provider
 from .schema import ProposedEntry, parse_proposals
@@ -29,9 +38,16 @@ from .schema import ProposedEntry, parse_proposals
 __all__ = [
     "AIConfig",
     "AIError",
+    "ConflictPair",
+    "ConflictResult",
     "OrganizeResult",
     "ProposedEntry",
     "Provider",
+    "RELATIONS",
+    "detect",
+    "looks_mixed",
     "organize",
+    "pack",
+    "parse_conflicts",
     "parse_proposals",
 ]

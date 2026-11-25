@@ -2,9 +2,9 @@
 
 跨 AI 工具的个人记忆治理层。本地优先、可审计、可迁移。
 
-> **状态：阶段 1 / 1.5 / 2 / 4 / 5 完成，阶段 3（AI 整理）与 6（产品化）未开始。尚未发布。**
-> 现在可以：从三个来源采记忆 → 人工审核 → 落 Markdown 库 → 通过 CLI 或 MCP 检索。
-> AI 整理（语义去重/冲突检测）与 Web 界面**都还没有**。请勿当作日常工具依赖。
+> **状态：阶段 1 / 1.5 / 2 / 4 / 5 完成，阶段 3 部分完成（AI 整理、冲突检测），阶段 6 未开始。尚未发布。**
+> 现在可以：从三个来源采记忆 → 人工审核 → 落 Markdown 库 → 检出互相矛盾的条目并建立取代链 → 通过 CLI 或 MCP 检索。
+> 语义去重、摘要字段与 Web 界面**还没有**。请勿当作日常工具依赖。
 
 ---
 
@@ -75,6 +75,15 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - 弱 PII（城市、区县、学校）→ `personal` → 只标记，不阻断（把每个城市名都拦会让规则被无视）
 - `memoryhub audit [--apply]` 用同一分类器复查已有条目；`sensitivity` 命令可人工升降
 
+**冲突与取代（P3-05）**
+
+- `memoryhub conflicts --ai`：把**全部**已批准条目交给你自己配的端点比对，产出「谁和谁矛盾 / 谁取代谁」
+- 提案落 `inbox/conflicts/*.json`，**不写库**。`conflicts` 看列表，`conflicts --show <id>` 看两段正文与逐字证据
+- 每条判定必须带两条**逐字引用**（一人一段）；在原文里定位不到的，判定降级为「矛盾」且不判胜负 —— 编造证据等于这条判定作废
+- `memoryhub supersede <旧id> --by <新id>` 是唯一会写取代链的命令：旧条目 `valid_until` 封窗、`status=archived`，新条目记 `supersedes`
+- 四道闸：两个 id 必须存在、取代方必须已批准且未过期（否则旧条目归档后事实就从库里消失）、已被取代的不能重复取代、不许成环
+- 旧条目正文超过 200 字时额外警告「这条可能不止一件事」—— 归档一条混装记忆会连带藏掉它剩下的内容，先拆分更稳
+
 **MCP（5 个工具，stdio）**
 
 - `memory_search` / `memory_get` / `memory_list`：只返回**已批准且未过期**的条目，每条带来源与有效期
@@ -86,12 +95,12 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 **其他**
 
-- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `sensitivity` `backup` `stats`
+- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `review` `conflicts` `supersede` `sensitivity` `backup` `stats`
 - **索引**：SQLite FTS5 + trigram，中文可检索；删掉 `database/index.db` 会自动重建，结果不变
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目
 - 保存前校验快照是否过期（`StaleEntryError`），不会把已批准的条目误降级
-- 163 个单元测试（含 32 个 CLI 端到端、11 个 watcher、9 个索引、19 个 MCP 含真实 stdio 会话），全部通过
+- 293 个单元测试（含 38 个冲突/取代、32 个 CLI 端到端、11 个 watcher、9 个索引、19 个 MCP 含真实 stdio 会话），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 
@@ -119,17 +128,23 @@ PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub import             # 加 --
 # 4. 审核（一屏一条：a 批 / r 拒 / c 改分类 / s 跳过 / q 退出）
 PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub review
 
-# 5. 检索
+# 5. 冲突：让模型比对已批准条目（--ai 会把正文发到你自己配的端点）
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub conflicts        # 看已有提案
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub conflicts --ai   # 生成提案，不写库
+# 人拍板之后才落取代链：旧条目的 valid_until 封窗、status 转 archived
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub supersede <旧id> --by <新id>
+
+# 6. 检索
 PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub search "论文"
 
-# 6. 分类建议（先看，再决定是否写）
+# 7. 分类建议（先看，再决定是否写）
 PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub recategorize          # dry run
 PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub recategorize --apply
 
-# 7. 让别的 AI 客户端来查（stdio，前台阻塞）
+# 8. 让别的 AI 客户端来查（stdio，前台阻塞）
 PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub mcp
 
-# 8. 跑测试
+# 9. 跑测试
 PYTHONPATH=src .venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
@@ -192,7 +207,7 @@ D:/my-memory                你的记忆（独立私有仓，绝不进本仓库�
   vault/                    正式记忆，按分类分目录
   inbox/pending/            待审提案
   inbox/rejected/           拒绝记录（保留，避免反复导入）
-  inbox/conflicts/          冲突待裁决
+  inbox/conflicts/          冲突提案（JSON；不进检索、不算条目）
   sources/                  原始来源快照
   exports/                  对外导出的只读快照（**当前无任何代码写入**，见 ADR-002）
   logs/                     运行日志

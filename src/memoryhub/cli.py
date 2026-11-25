@@ -11,9 +11,10 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import __version__, boundary, config, review
+from . import __version__, boundary, config, conflicts, review
 from .adapters import ADAPTERS, build
-from .ai import AIConfig, AIError, Provider, organize
+from .ai import AIConfig, AIError, Provider, detect, looks_mixed, organize
+from .ai.conflict import RELATION_LABELS
 from .backup import (
     GitUnavailable,
     HistoryUnavailable,
@@ -177,7 +178,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     add(
         "layout",
         "OK" if not missing else "FAIL",
-        "complete" if not missing else "missing: " + ", ".join(missing),
+        "complete"
+        if not missing
+        # The real failure this produced: a vault created before `exports/`
+        # joined LAYOUT stayed "incomplete" forever, and nothing said that
+        # `init` is idempotent and would create only the missing directory.
+        else "missing: " + ", ".join(missing) + " (run `memoryhub init` again)",
     )
 
     git = shutil.which("git")
@@ -674,6 +680,260 @@ def cmd_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _one_line(text: str, limit: int = 60) -> str:
+    head = " ".join(text.split())
+    return head if len(head) <= limit else head[: limit - 3] + "..."
+
+
+def _relation_label(record: dict) -> str:
+    relation = str(record.get("relation") or "?")
+    return RELATION_LABELS.get(relation, relation)
+
+
+def _print_record(store: VaultStore, record: dict, *, detail: bool = False) -> None:
+    first, second = (str(part) for part in (record.get("pair") or ["?", "?"])[:2])
+    evidence = record.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    advice = ""
+    if record.get("verified") is False:
+        advice = "  [证据未核实，模型原话在原文里定位不到]"
+    print(f"{_relation_label(record)}{advice}")
+    for entry_id in (first, second):
+        entry = store.get(entry_id)
+        if entry is None:
+            print(f"  {entry_id}  （条目已不存在，提案作废：删掉 inbox/conflicts 下对应文件）")
+            continue
+        print(f"  {entry_id}  {entry.category:<10} {entry.status:<9} {entry.created_at[:10]}")
+        body = entry.body if detail else _one_line(entry.body, 72)
+        for line in body.splitlines() or [""]:
+            print(f"    {line}")
+        quote = evidence.get(entry_id)
+        if detail and quote:
+            print(f"    证据（逐字）: {quote}")
+    print(f"  为什么: {record.get('reason') or ''}")
+    winner = record.get("winner")
+    if winner:
+        print(f"  建议保留: {winner}")
+        lost = second if winner == first else first
+        print(f"  落实: memoryhub supersede {lost} --by {winner}")
+    else:
+        print("  无人可判胜负，需要你自己决定保留哪条，再发一条新的记忆")
+    if detail:
+        print(f"  检测于 {record.get('detected_at')}  模型 {record.get('model')}")
+    print()
+
+
+def cmd_conflicts(args: argparse.Namespace) -> int:
+    """Inspect, or generate, conflict proposals (P3-05)."""
+    store = _store(args)
+    if args.show:
+        return _conflicts_show(store, args)
+    if args.ai:
+        return _conflicts_detect(store, args)
+    return _conflicts_list(store)
+
+
+def _conflicts_list(store: VaultStore) -> int:
+    records, problems = conflicts.load_records(store.root)
+    for problem in problems:
+        print(f"warning: {problem}", file=sys.stderr)
+    if not records:
+        print("没有冲突提案。")
+        print(
+            "hint: memoryhub conflicts --ai 让模型比对已批准条目（内容会离开本机，先确认配置）"
+        )
+        return 0
+    for record in records:
+        _print_record(store, record)
+    print(f"{len(records)} 条提案，未写入任何 supersedes —— 落实要你自己跑 supersede。")
+    return 0
+
+
+def _conflicts_show(store: VaultStore, args: argparse.Namespace) -> int:
+    wanted = args.show
+    records, problems = conflicts.load_records(store.root)
+    for problem in problems:
+        print(f"warning: {problem}", file=sys.stderr)
+    hits = [record for record in records if wanted in (record.get("pair") or [])]
+    if not hits:
+        print(f"没有涉及 {wanted} 的提案。")
+        return 0
+    for record in hits:
+        _print_record(store, record, detail=True)
+    return 0
+
+
+def _conflicts_detect(store: VaultStore, args: argparse.Namespace) -> int:
+    """Run the model over the approved corpus and write proposals.
+
+    Cost and privacy are both announced before the call: the whole approved
+    corpus leaves the machine, and the answer is a suggestion, not a verdict.
+    """
+    try:
+        cfg = AIConfig.from_config()
+        if cfg is None:
+            print(
+                "error: 没有配置 AI，--ai 不可用。\n"
+                f"       在 {config.config_path()} 里加 [ai] 的 base_url 与 model（见 memoryhub import --help）",
+                file=sys.stderr,
+            )
+            return 1
+        cfg.api_key()
+    except AIError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    entries, errors = store.scan()
+    _unreadable_hint(errors)
+    pool = [
+        entry
+        for entry in entries
+        if entry.status == "approved" and not entry.is_expired()
+    ]
+    if args.category:
+        pool = [entry for entry in pool if entry.category == args.category]
+    if len(pool) < 2:
+        print(f"只有 {len(pool)} 条已批准且未过期的记忆，无法比对。")
+        return 0
+
+    print(f"冲突检测：{len(pool)} 条已批准记忆，共 {sum(len(e.body) for e in pool):,} 字")
+    print(f"  端点  {cfg.base_url}")
+    print(f"  模型  {cfg.model}")
+    print("  注意  全部正文会离开本机，发送前不做脱敏。")
+    print("  产出  只是提案，不会写入 supersedes。")
+    if not getattr(args, "yes", False):
+        if not sys.stdin.isatty():
+            print(
+                "error: 需要确认。非交互环境下加 --yes，表示已知悉内容会被发送到该端点。",
+                file=sys.stderr,
+            )
+            return 1
+        if input("继续？[y/N] ").strip().lower() not in ("y", "yes"):
+            print("已取消，未发送任何内容。")
+            return 1
+    print()
+
+    provider = Provider(cfg)
+    try:
+        result = detect(pool, provider)
+    except AIError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"{result.calls} 次调用，{result.chars_sent:,} 字发送，{len(result.pairs)} 对候选")
+    if not result.pairs:
+        print("模型没有报告冲突。这不等于库里没有矛盾——它只看到了这一批正文。")
+    for problem in result.problems[:20]:
+        print(f"  ! {problem}")
+    if len(result.problems) > 20:
+        print(f"  ... 其余 {len(result.problems) - 20} 条省略")
+    if result.pairs:
+        print()
+    for pair in result.pairs:
+        record = pair.to_record(model=cfg.model)
+        if getattr(args, "dry_run", False):
+            print(f"would write  {conflicts.record_path(store.root, pair.a, pair.b).name}  "
+                  f"{_relation_label(record)}")
+            continue
+        path = conflicts.save_record(store.root, record)
+        print(f"wrote  {path.name}  {_relation_label(record)}"
+              + ("" if pair.verified else "  [证据未核实]"))
+
+    if getattr(args, "dry_run", False):
+        print("\ndry run：没有写任何文件（模型调用已经发生，钱已经花了）")
+    elif result.pairs:
+        print(f"\n{len(result.pairs)} 条提案在 inbox/conflicts/，用 `memoryhub conflicts` 看。")
+    return 0
+
+
+def cmd_supersede(args: argparse.Namespace) -> int:
+    """Retire one memory in favour of another. The only write in this workflow."""
+    store = _store(args)
+    old = store.get(args.old_id)
+    new = store.get(args.by)
+    if old is None:
+        print(f"error: 找不到被取代条目 {args.old_id}", file=sys.stderr)
+        return 1
+    if new is None:
+        print(f"error: 找不到取代方条目 {args.by}", file=sys.stderr)
+        return 1
+
+    print(f"被取代  {old.id}  {old.category}  {old.status}")
+    for line in old.body.splitlines():
+        print(f"        {line}")
+    if looks_mixed(old):
+        print(
+            f"  注意  这条正文 {len(old.body)} 字，可能不止一件事。归档后其他 AI "
+            "就查不到它剩下的内容了——先把还有效的部分拆成新记忆，再取代更稳。"
+        )
+    print(f"取代方  {new.id}  {new.category}  {new.status}")
+    print(f"        {_one_line(new.body, 100)}")
+    print()
+
+    if args.dry_run:
+        print("dry run：没有写任何文件。")
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(
+                "error: 归档是不可逆的状态变更，非交互环境需要 --yes。",
+                file=sys.stderr,
+            )
+            return 1
+        if input("确认归档？[y/N] ").strip().lower() not in ("y", "yes"):
+            print("已取消，什么都没写。")
+            return 1
+
+    try:
+        retired, keeper = conflicts.apply_supersede(
+            store, old.id, new.id, note=args.note or ""
+        )
+    except (KeyError, ValidationError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    moved = conflicts.resolve_record(
+        store.root,
+        old.id,
+        new.id,
+        keep=keeper.id,
+        retired=retired.id,
+        note=args.note or "",
+    )
+    print(f"archived  {retired.id}  valid_until={retired.valid_until}  "
+          f"superseded_by={retired.superseded_by}")
+    print(f"supersedes {keeper.id} → {', '.join(keeper.supersedes)}")
+    if moved:
+        print(f"提案已归档到 {moved.relative_to(store.root)}")
+    print("\n从现在起，检索与 MCP 只会返回后者；前者仍可用 --include-expired 查到。")
+    return 0
+
+
+
+    store = _store(args)
+    # Refusing here is the point: without a terminal the loop would read EOF,
+    # decide nothing, and look like it worked. Scripts have `approve --all`.
+    if not sys.stdin.isatty():
+        print("error: `review` needs a terminal (stdin is not a TTY)", file=sys.stderr)
+        print(
+            "hint: for scripts use `memoryhub list --status pending` then `memoryhub approve <id>`",
+            file=sys.stderr,
+        )
+        return 2
+    outcome = review.run(
+        store,
+        sys.stdin,
+        sys.stdout,
+        sys.stderr,
+        limit=args.limit,
+        reset_skips=args.reset,
+    )
+    return 1 if outcome.errors else 0
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     """Review pending proposals one screen at a time (P4-05)."""
     store = _store(args)
@@ -1045,8 +1305,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "主线六条：init 建库 · import 导入（--ai 交给模型整理）· review 逐条审核 · "
             "approve 按 id/批量通过 · mcp 对外服务 · doctor 体检。\n"
-            "审核辅助仍可用但不占主屏：list show search diff reject，"
-            "以及其他高级命令（memoryhub <命令> --help）。"
+            "审核辅助仍可用但不占主屏：list show search diff reject "
+            "conflicts supersede，以及其他高级命令（memoryhub <命令> --help）。"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1291,6 +1551,48 @@ def build_parser() -> argparse.ArgumentParser:
         "stats", parents=[vault_arg], help="show vault statistics"
     )
     p_stats.set_defaults(func=cmd_stats)
+
+    p_conf = sub.add_parser(
+        "conflicts",
+        parents=[vault_arg],
+        help="list conflict proposals; --ai asks the model for new ones (P3-05)",
+        description=(
+            "Conflict proposals are suggestions, never writes. --ai sends every "
+            "approved entry to your own model and stores the answer in "
+            "inbox/conflicts/. Nothing reaches the vault until you run "
+            "`memoryhub supersede <old> --by <new>`. --show <id> prints the "
+            "entries behind every proposal mentioning that id."
+        ),
+    )
+    p_conf.add_argument(
+        "--ai", action="store_true", help="run the model over all approved entries"
+    )
+    p_conf.add_argument("--show", metavar="ID", default=None, help="detail for one entry")
+    p_conf.add_argument("--category", choices=CATEGORIES, default=None)
+    p_conf.add_argument(
+        "--yes", action="store_true", help="with --ai: skip the send confirmation"
+    )
+    p_conf.add_argument(
+        "--dry-run", action="store_true", help="with --ai: call the model, write nothing"
+    )
+    p_conf.set_defaults(func=cmd_conflicts)
+
+    p_sup = sub.add_parser(
+        "supersede",
+        parents=[vault_arg],
+        help="archive one memory in favour of another (ADR-006)",
+        description=(
+            "Write the supersede chain: the old entry gets valid_until=now and "
+            "status=archived, the new one gets it in `supersedes`. Queries and "
+            "MCP stop returning the old one; --include-expired still shows it."
+        ),
+    )
+    p_sup.add_argument("old_id", help="the entry that stops being true")
+    p_sup.add_argument("--by", required=True, dest="by", help="the entry that replaces it")
+    p_sup.add_argument("--note", default="", help="why, stored on the replacement")
+    p_sup.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
+    p_sup.add_argument("--yes", action="store_true", help="skip the confirmation")
+    p_sup.set_defaults(func=cmd_supersede)
 
     #: Six commands carry the product; the rest are reachable but off the first
     #: screen. 20 verbs in `--help` is a large part of why the tool reads as

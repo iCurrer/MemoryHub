@@ -97,6 +97,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("[FAIL]", out)
 
+    def test_doctor_names_the_repair_for_a_missing_directory(self) -> None:
+        # A vault created before a directory joined LAYOUT stays incomplete for
+        # ever unless something says `init` is idempotent.
+        self.init_vault()
+        (self.vault / "exports").rmdir()
+        code, out, _err = self.run_cli("doctor")
+        self.assertEqual(code, 1)
+        self.assertIn("exports", out)
+        self.assertIn("memoryhub init", out)
+
     # ------------------------------------------------------- approve tier
 
     def test_approve_refuses_a_review_tier_category(self) -> None:

@@ -222,8 +222,8 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 > 顺序也从「分类优先」改为「拆分优先」——7 条 mixed 证明切不细就必错。
 
 > **2026-11-25 进度**：P3-01 ✅ / P3-02 ✅（改手写校验，未引入 Pydantic）/ P3-03 ⚠️ 部分
-> （拆分与分类已通，摘要字段未做）/ P3-00 ⬜ 未做 / P3-04 ⬜ / P3-05 ⬜。
-> 实现说明见 ADR-016；验收为 213 个测试 + 本地假服务端到端（真实 HTTP、真实写库）。
+> （拆分与分类已通，摘要字段未做）/ P3-05 ✅ / P3-00 ⬜ 未做 / P3-04 ⬜。
+> 实现说明见 ADR-016、ADR-018；验收为 293 个测试 + 两处本地假服务端端到端（真实 HTTP）。
 > **P3-00 仍未做**：AI 模式下不走 `classify`，但默认路径（不带 `--ai`）仍受 fallback 影响，
 > 所以它没被 AI 层替代，只是不再阻塞主流程。
 
@@ -234,7 +234,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 | P3-02 | 结构化输出校验（不引入 Pydantic，保持零第三方依赖，见 ADR-005） | `ai/schema.py` | 返回非法 JSON / 缺字段时被拒绝且给出原因 |
 | P3-03 | **拆分优先**：先判定「这段里有几个独立事实」并给出切分建议；再对规则覆盖不到的条目（fallback + keyword 两类，实测 35.8%）做分类与摘要 | `ai/split.py` / `ai/classify.py` | 切分建议不自动改文件，只产提案；分类产出 `status` 恒为 `pending` |
 | P3-04 | 语义去重 | `ai/dedupe.py` | 近似条目产出合并建议，不自动合并 |
-| P3-05 | 冲突检测与取代链维护 | `ai/conflict.py` | 矛盾条目产出 `conflicts/` 记录 + 建议 `supersedes`，**不自动写入** |
+| P3-05 | 冲突检测与取代链维护 ✅ | `ai/conflict.py` / `conflicts.py` | 矛盾条目产出 `conflicts/` 记录 + 建议 `supersedes`，**不自动写入**。落地见下方「P3-05 实际落地」 |
 
 **阶段 3 硬约束**：AI 产出的一切写入 `inbox/`，`status=pending`，绝不直接落 `vault/`。
 
@@ -243,6 +243,20 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 **关于 P3-02 的实现方式**：原 `Pydantic 校验` 与 ADR-005「阶段 1 零第三方运行时依赖」冲突，改为手写 schema 校验。
 若确实需要 Pydantic，应先提 ADR 推翻 ADR-005，而不是顺手加依赖。
+
+**P3-05 实际落地（2026-11-25，ADR-018）**：`ai/conflict.py`（判定）+ `conflicts.py`（提案与唯一写入口）。
+
+- 输入是**全部**已批准未过期条目，单次 ≤300 条，超限拒绝而非截断。不做相似度预筛 —— 实测真实的
+  「论文题目未定 vs 已定」那对在同分类 309 对里按字符 bigram 余弦只排第 31（0.052），阈值化必漏。
+- 每条判定必须带两侧逐字引用；定位不到就把关系降级为 `contradicts` 并清空 `winner`（保留 pair）。
+  **判定了什么是"人在审"，判不了"谁对"不许假装。**
+- 提案落 `inbox/conflicts/*.json`（该目录被 store 扫描，写 `.md` 会被当成坏条目，`doctor` 变红）。
+- `memoryhub conflicts` 列表 / `--show <id>` 详情 / `--ai` 生成；`memoryhub supersede <old> --by <new>`
+  是唯一的写入路径（四道闸 + 先写 `supersedes` 后封窗 + 结案提案移 `logs/conflicts/`）。
+- 已知缺口：归档对整条生效，混装条目（如真库里那条 401 字的）需要先拆分再取代；`supersede` 会警告但不代做。
+
+**与 P3-04 的边界**：`duplicate`（同一件事两份）与 `supersedes`（同一件事的新旧两份）由同一个判定给出，
+去重落地时必须复用这条判定，不要另起一套，否则会出现两条互斥的合并路径。
 
 ---
 
