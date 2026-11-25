@@ -1,6 +1,6 @@
 # HANDOFF · 项目交接
 
-> 最后更新：2026-11-25 ｜ 当前阶段：**阶段 1 / 1.5 / 2（除 P2-03b）/ 3（P3-01/02/05 完成、P3-03 部分）/ 4 / 5 完成**
+> 最后更新：2026-11-25 ｜ 当前阶段：**阶段 1 / 1.5 / 2（除 P2-03b）/ 3（P3-01/02 完成、P3-05 机制完成判定层待重做、P3-03 部分）/ 4 / 5（含 P5-06 回写）完成**
 
 任何接手的 AI Agent：**先读 `AGENTS.md`（工程契约），再读本文件（现状），最后读 `docs/02-roadmap.md` 领工单。** 不要跳过前三者直接改代码。
 
@@ -8,7 +8,11 @@
 
 ## 1. 一句话现状
 
-**三个来源（WorkBuddy / Claude Code / Codex）→ 整理 → 审核 → vault → CLI / MCP 检索 → 冲突检测与取代，全链路已通。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 按 `--permission` 分级暴露 4–5 个工具，`backup` 带敏感闸门。**293 个单元测试全过。** 冲突检测（P3-05）已落地：`conflicts --ai` 只产提案，`supersede` 是唯一写入口（四道闸，禁环）。**未做：语义去重（P3-04）、P3-00 fallback 显式化、回写分发、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+**闭环已合上：三个来源（WorkBuddy / Claude Code / Codex）→ 整理 →（可选）审核 → vault → CLI / MCP 检索 → 回写各 AI 的记忆。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 按 `--permission` 分级暴露 4–5 个工具，**`sync` 把当前有效记忆投影回三个工具各自的受管区块**，`backup` 带敏感闸门。**311 个单元测试全过。** 冲突检测（P3-05）机制已落地：`conflicts --ai` 只产提案，`supersede` 是唯一写入口（四道闸，禁环）；**但判定层在真实语料上不合格，见下节**。**未做：语义去重（P3-04）、P3-00 fallback 显式化、冲突判定层重做、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+
+**冲突判定层实测不合格（2026-11-25，接真实 DeepSeek 端点后）**：50 条 8.5k 字跑出 15 对提案，三处硬伤——① 漏掉库里唯一那对真实冲突（`782bcbcf` 论文题目未定 vs `e6e751a1` 已定题目）；A/B 实测仅 8 条无关条目就能让它消失；只给两条时虽会报，但 **winner 判反**（按 `created_at` 认「晚录入」为「更新」）；② 把汇总条目 `617c26b0`（项目 + 兴趣 + 口径）判成与 6 条独立记忆「重复」，照做会连带删掉无关内容；③ 换 `deepseek-reasoner` 复跑，3 对全属同类误报，仍漏目标对。**所以 `conflicts --ai` 的输出只能当线索，不要照着执行 `supersede`。**
+
+**回写分发怎么工作（ADR-019）**：`memoryhub sync` 只写 `<!-- MEMORYHUB:BEGIN -->` 与 `<!-- MEMORYHUB:END -->` 之间，区块外一个字节不碰；三个目标 `~/.claude/CLAUDE.md`、`~/.workbuddy/user-*/MEMORY.md`、`~/.codex/AGENTS.md`，路径与采集适配器共用同一批环境变量（读哪写哪）。默认只出计划，`--write` 才落盘并先备份。**三个适配器 `read()` 会先剥掉区块**——不剥的话每次 sync 都成为下次 import 的输入，库会慢慢填满自己的副本；真实库实测写完后 `import` 得 0 new（25 / 17 / 0 already present）。
 
 **AI 整理怎么工作（ADR-016）**：`Adapter.discover()` 仍是算法（找文件是确定的）；`read()` 在 `--ai` 模式改走模型（拆分 + 分类是语义的）；模型返回的每一条必须带从原文逐字复制的 `quote`，归一化后定位不到就标记待核实。**这条 quote 校验是唯一能自动化的防幻觉手段，不要删。**
 
@@ -78,7 +82,9 @@
 | `tools/audit_classify.py` | 规则分类对账：三层准确率 + 混淆矩阵，`--min-accuracy` 可作 CI 门禁 | 稳定，标注文件在 `docs/audits/` |
 | `tools/lint_staged.py` | 暂存内容 + 提交信息的路径/PII 扫描；`--all` 全量、`--message-only` | 稳定（ADR-013） |
 | `tools/hooks/` + `tools/setup_dev.sh` | `core.hooksPath` 钩子，clone 后跑一次 | 稳定；新增规则改 `RULES` 与 `pii-allowlist.txt` |
-| `src/memoryhub/cli.py` | **六条主线**：`init` `import` `review` `approve` `mcp` `doctor`；辅助：`list` `show` `search` `diff` `reject` `conflicts` `supersede`；其余命令保留但移出帮助表 | 稳定（ADR-016、ADR-017、ADR-018） |
+| `src/memoryhub/cli.py` | **七条主线**：`init` `import` `review` `approve` `sync` `mcp` `doctor`；辅助：`list` `show` `search` `diff` `reject` `conflicts` `supersede`；其余命令保留但移出帮助表 | 稳定（ADR-016/017/018/019） |
+| `src/memoryhub/managed.py` | 受管区块的标记常量 + `strip_block` / `replace_block` / `find_block`；**刻意零依赖**，写方与三个读方共用 | 稳定；标记改动等于让所有已写出的区块变成普通正文 |
+| `src/memoryhub/sync.py` | 回写：目标解析（含 `user-*/MEMORY.md` 的目录级 glob）、分类渲染、计划/写入/备份/回读校验 | 稳定（ADR-019）；**默认 dry run 是有意的**，别改成默认写 |
 | `src/memoryhub/review.py` | 交互式审核：队列从 vault 推导、跳过游标存配置目录、非 TTY 拒绝 | 稳定（ADR-017） |
 | `tests/test_store.py` | 37 个用例 | 会随功能增长 |
 | `tests/test_cli.py` | 38 个端到端用例（含审核流、帮助页收窄、`--ai` 错误路径） | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
@@ -91,6 +97,7 @@
 | `tests/test_safety.py` | 6 个用例 | 凭证与 PII 分级 |
 | `tests/test_ai.py` | 27 个用例 | 假传输桩：提示词契约、JSON 提取、逐条校验、quote 定位、配置读取 |
 | `tests/test_review.py` | 23 个用例 | 队列顺序、跳过持久化、断点续审、改分类、blocked 拦截、EOF、Ctrl-C、非 TTY 拒绝 |
+| `tests/test_sync.py` | 18 个用例 | 标记剥离与替换、渲染确定性、备份、`--write` 幂等、**导入不吃回区块**（EchoChamberTests） |
 | `tests/test_conflicts.py` | 38 个用例 | 分批不丢条目、逐条校验、证据定位失败降级、提案不入库、四道闸、禁环、真实 HTTP 端到端 |
 | `tests/test_boundary.py` | 15 个用例 | 两仓隔离：vault 在 git 树内即拒、pre-push 钩子、远端 URL 判定 |
 | `tests/test_classify.py` | 15 个用例 | 加权规则、决定性权重、平票优先级 |
@@ -119,7 +126,7 @@ cd /d/project/MemoryHub
 pip install pyyaml mcp      # 运行时依赖
 export PYTHONPATH=src
 
-PYTHONPATH=src .venv/Scripts/python.exe -m unittest discover -s tests -v   # 期望 Ran 293, OK
+PYTHONPATH=src .venv/Scripts/python.exe -m unittest discover -s tests -v   # 期望 Ran 311, OK
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -181,9 +188,9 @@ Claude Desktop 放在 `%APPDATA%\Claude\claude_desktop_config.json`；Cursor 放
 
 ## 7. 决策边界（改之前必须看）
 
-不可推翻的决策在 `AGENTS.md`（7 条）与 `docs/01-decisions.md`（ADR-001 至 ADR-017，其中 ADR-010 / ADR-011 / ADR-015 的三项变更待拍板）。最容易被误做的三条：
+不可推翻的决策在 `AGENTS.md`（7 条）与 `docs/01-decisions.md`（ADR-001 至 ADR-019，其中 ADR-010 / ADR-011 / ADR-015 的三项变更待拍板）。最容易被误做的三条：
 
-1. **不要实现"把中央记忆写回各 AI 工具"** —— 这是策划书原方案，已否决（ADR-002）。看到 `exports/` 就想"顺手写回去"是本项目第一大坑。
+1. **回写只发生在 `sync` 里，且只在受管区块内**（ADR-019）。ADR-002 仍然有效：`Adapter.can_write` 恒 `False`，适配器不写别人的文件。**不要**把 `sync` 扩成"顺手整理一下目标文件格式"，也不要让任何代码路径在区块外落笔——撤销能力全靠这一点。
 2. **不要让 AI 产出直接进 `vault/`** —— 必须 `status=pending`，`review` 级别要人批（ADR-003，本轮已把 `--approve` 的绕过口封上）。
 3. **不要把 `vault/` 放进本仓库** —— 哪怕只是"临时测试"（ADR-007）。
 
@@ -193,15 +200,16 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 
 ## 8. 下一步
 
-采集、整理（单向）、审核、检索、冲突裁决、备份已闭环，**已有 50 条 approved 实际可查，Claude Code 真机接入通过，冲突检测与取代链已落地**。按优先级：
+**闭环已经合上**：采集 → 整理 →（可选）审核 → vault → 检索 → 回写各 AI 的受管区块。50 条 approved 实际可查，Claude Code 真机接入通过，`sync` 已对三个目标实写并验证「导入不会吃回区块」。按优先级：
 
-1. **真实库还剩一处要人做**：`782bcbcf` 混装条目。它同时装着「工作台目录」「使用偏好」「管理文件清单」，其中只有论文那句过期。**先拆出仍然有效的三条，再 `supersede 782bcbcf --by <题目条目>`** —— 直接归档会丢内容。这是 P3-05 的第一个真实闭环，判断「哪些还有效」只能人来。
-2. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。
-3. **P3-04 语义去重**：判断"两条说的是不是同一件事"。**必须复用 P3-05 的判定**（ADR-018 复审时点）：`duplicate` 与 `supersedes` 是同一件事的两份/新旧两份，两套判定并存会出现互斥的合并路径。
-4. **P3-03 余下部分**：摘要字段（拆分与分类已通）。
-5. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
-6. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。
-6. 已结案：53 条 pending 已审完（50 approved / 2 rejected / 1 有意留 pending，见 §1）。
+1. **重做冲突判定层（唯一有真实反例待修的功能）**：实测证据在 ADR-018 末节——15 条提案里目标对漏报、汇总条目被整条判重复、用 `created_at` 推新旧导致方向反；`deepseek-reasoner` 复跑同样是 3 条误报。要改三件事：① 成对或小批判定（全量一次送会被稀释，8 条就够漏）；② 提示词禁止把混装条目整条归档，只判重合的具体片段；③ 禁止用 `created_at` 当事实时间。改完拿 `782bcbcf`/`e6e751a1` 与 `617c26b0` 两条做回归。
+2. **真实库还剩一处要人做**：`782bcbcf` 混装条目。它同时装着「工作台目录」「使用偏好」「管理文件清单」，其中只有论文那句过期。**先拆出仍然有效的三条，再 `supersede 782bcbcf --by <题目条目>`** —— 直接归档会丢内容。判断「哪些还有效」只能人来。
+3. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。
+4. **P3-04 语义去重**：判断"两条说的是不是同一件事"。**必须复用第 1 条修好的判定**（ADR-018 复审时点）：`duplicate` 与 `supersedes` 是同一件事的两份/新旧两份，两套判定并存会出现互斥的合并路径。
+5. **`sync` 的规模问题**：真实库 50 条约 8.9k 字，`~/.claude/CLAUDE.md` 从 15KB 涨到 35KB，每次会话多约一万 token。条目到几百条时必须先定增量方案（但**不能改成"只写变化"**，读者需要的是完整当前状态，见 ADR-019 复审时点）。
+6. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
+7. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。
+8. 已结案：53 条 pending 已审完（50 approved / 2 rejected / 1 有意留 pending，见 §1）。
 
 **已知缺口（不是 bug，是没做）**：`review` 没有 `u` 撤销上一步，误按只能靠退出时打印的 id 清单
 手工 `reject <id>` 补救。若真实使用中出现"想回头改上一条"的抱怨，再加（ADR-017 复审时点）。

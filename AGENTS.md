@@ -10,8 +10,8 @@ MemoryHub 是**跨 AI 工具的个人记忆治理层**：采集各 AI 工具的�
 
 ## 当前阶段
 
-阶段 1 / 1.5 / 2（除 P2-03b）/ 3（部分：P3-01、P3-02、P3-05 完成；P3-03 仅拆分与分类，摘要未做）/ 4 / 5 已完成：数据层、三个只读采集适配器、轮询监控、FTS5 索引、CLI 审核流、MCP（含权限分级）、敏感检测、Git 备份、AI 层（用户自带 API key）、冲突检测与取代链。
-阶段 3 剩余部分（P3-00 / P3-04）与阶段 6（产品化）尚未实现，**不得在 README 或文档中声称已实现**。实时进度以 `HANDOFF.md` 为准。
+阶段 1 / 1.5 / 2（除 P2-03b）/ 3（部分：P3-01、P3-02 完成；P3-05 机制完成但判定层待重做；P3-03 仅拆分与分类，摘要未做）/ 4 / 5（含 P5-06 回写分发）已完成：数据层、三个只读采集适配器、轮询监控、FTS5 索引、CLI 审核流、MCP（含权限分级）、敏感检测、Git 备份、AI 层（用户自带 API key）、冲突检测与取代链、受管区块回写。
+阶段 3 剩余部分（P3-00 / P3-04 / 冲突判定层重做）与阶段 6（产品化）尚未实现，**不得在 README 或文档中声称已实现**。实时进度以 `HANDOFF.md` 为准。
 
 > **冲突裁决的边界不可被绕过**：模型只出提案（`inbox/conflicts/*.json`），`supersedes` / `valid_until` 只由 `memoryhub supersede` 写，且必须由人给两个 id。任何"检测到冲突就自动归档"的实现都违反 ADR-003 与 ADR-018。
 
@@ -41,11 +41,11 @@ MemoryHub 是**跨 AI 工具的个人记忆治理层**：采集各 AI 工具的�
 
 ## 已定决策（不可推翻，改了要先写 ADR）
 
-1. **不做回写分发。** 不向 Codex / Claude / Cursor 的原生记忆文件写入任何内容。只读采集 + 单向生成只读快照。理由见 `docs/01-decisions.md` ADR-002。
+1. **回写只在受管区块内。** ADR-002 仍然禁止适配器写别人的文件（`Adapter.can_write` 恒 `False`）。`memoryhub sync` 是唯一例外：只写 `<!-- MEMORYHUB:BEGIN -->` 与 `<!-- MEMORYHUB:END -->` 之间，区块外一个字节不碰，删掉区块即完全还原；读方必须先剥掉区块再解析，否则同步会成为下一次导入的输入。任何在区块外落笔、或「顺手整理目标文件格式」的实现都违反 ADR-019。
 2. **三级信任替代逐条审核。** `auto`（低风险自动入库，靠 Git 可回滚）/ `review`（进 inbox 等人批）/ `blocked`（敏感或冲突，阻断）。见 ADR-003。
 3. **先不做 Web UI。** 阶段 1-3 只有 CLI 与 MCP。见 ADR-004。
 4. **代码与数据物理分离，且由机制保证。** 本仓库只装代码，不含 vault、索引、日志、来源快照；vault 路径由配置提供，默认 `D:/my-memory`。**云端只有这一个仓（代码仓）；每个用户的记忆仓各自独立、自选远端，MemoryHub 不代建不代推。** 三道门禁不得删除或绕过：`init` 拒绝把 vault 建在任何 git 工作树内；`doctor` 把 `repo isolation` / `vault remote` 当硬检查；`tools/hooks/` 的 pre-commit 与 commit-msg 扫描暂存内容**与提交信息**。见 ADR-013。
-5. **单一 Core API。** 所有写操作必须经过 `memoryhub.storage`，Adapter 与 CLI 一律不得直接写文件。
+5. **单一 Core API。** 对 **vault** 的所有写操作必须经过 `memoryhub.storage`，Adapter 与 CLI 一律不得直接写 vault 文件。`sync` 写的是 vault 之外的投影，不经 storage，这是 ADR-019 的例外，不构成第二套写入路径。
 6. **Markdown 是唯一真相源（仅指输出侧 vault）。** 任何索引、SQLite、缓存都必须可从 vault 的 Markdown 重建；不得出现只能从索引读到的记忆。输入侧（上游来源）允许 md / jsonl / zstd-jsonl / sqlite（ADR-011）。
 7. **依赖从严。** 阶段 1 曾零第三方依赖（ADR-005）；现仅允许 `pyyaml`（ADR-005 部分取代）与 `mcp`（ADR-012）。新增任何运行时依赖必须先写 ADR。
 
@@ -60,7 +60,9 @@ src/memoryhub/
   storage/markdown_store.py  # 唯一写入入口：原子写、文件锁、扫描、检索
   storage/index.py       # SQLite FTS5 索引（可从 Markdown 重建）
   adapters/              # 外部来源适配器（只读）：workbuddy / claude / codex
-  ai/                    # 用户自带 API key 的整理层：provider / schema / organize（只产 pending 提案）
+  ai/                    # 用户自带 API key 的整理层：provider / schema / organize / conflict（只产提案）
+  managed.py             # 受管区块标记与剥离；写方与读方共用，刻意零依赖
+  sync.py                # 回写：把 vault 投影成各工具记忆文件里的受管区块（ADR-019）
   watcher/               # 轮询 + 防抖 + 哈希去重
   mcp/                   # MCP stdio 服务端与权限分级
   backup/                # vault 的 git 备份与变更历史

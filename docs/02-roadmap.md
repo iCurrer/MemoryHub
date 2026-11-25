@@ -234,7 +234,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 | P3-02 | 结构化输出校验（不引入 Pydantic，保持零第三方依赖，见 ADR-005） | `ai/schema.py` | 返回非法 JSON / 缺字段时被拒绝且给出原因 |
 | P3-03 | **拆分优先**：先判定「这段里有几个独立事实」并给出切分建议；再对规则覆盖不到的条目（fallback + keyword 两类，实测 35.8%）做分类与摘要 | `ai/split.py` / `ai/classify.py` | 切分建议不自动改文件，只产提案；分类产出 `status` 恒为 `pending` |
 | P3-04 | 语义去重 | `ai/dedupe.py` | 近似条目产出合并建议，不自动合并 |
-| P3-05 | 冲突检测与取代链维护 ✅ | `ai/conflict.py` / `conflicts.py` | 矛盾条目产出 `conflicts/` 记录 + 建议 `supersedes`，**不自动写入**。落地见下方「P3-05 实际落地」 |
+| P3-05 | 冲突检测与取代链维护 ⚠️ 机制完成、判定层待重做 | `ai/conflict.py` / `conflicts.py` | 矛盾条目产出 `conflicts/` 记录 + 建议 `supersedes`，**不自动写入**。2026-11-25 真实模型实测不合格，见 ADR-018 末节与下方「P3-05 实际落地」 |
 
 **阶段 3 硬约束**：AI 产出的一切写入 `inbox/`，`status=pending`，绝不直接落 `vault/`。
 
@@ -243,6 +243,15 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 **关于 P3-02 的实现方式**：原 `Pydantic 校验` 与 ADR-005「阶段 1 零第三方运行时依赖」冲突，改为手写 schema 校验。
 若确实需要 Pydantic，应先提 ADR 推翻 ADR-005，而不是顺手加依赖。
+
+**P5-06 实际落地（2026-11-25，ADR-019）**：`memoryhub sync [--to ...] [--write] [--diff] [--list]`。
+
+- 只写 `<!-- MEMORYHUB:BEGIN -->` / `<!-- MEMORYHUB:END -->` 之间，区块外一个字节不碰；删掉区块即完全还原。
+- 三个目标：`~/.claude/CLAUDE.md`、`~/.workbuddy/user-*/MEMORY.md`、`~/.codex/AGENTS.md`（缺失则新建）。
+  路径与 adapters 共用 `CLAUDE_HOME` / `CODEX_HOME` / `WORKBUDDY_HOME` —— 读哪写哪。
+- 默认 dry run；`--write` 落盘，写前 `*.bak-memoryhub-<时间戳>` 备份，写后回读校验。
+- **三个适配器在 read 时剥掉区块**，否则每次同步都会成为下次导入的输入。真实库实测：写完后
+  `import` 得 0 new（25 / 17 / 0 already present），待审队列没增加。
 
 **P3-05 实际落地（2026-11-25，ADR-018）**：`ai/conflict.py`（判定）+ `conflicts.py`（提案与唯一写入口）。
 
@@ -353,6 +362,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 **真机结果**：42 条里 10 条偏低（1 条完整住址 → blocked，9 条学校/籍贯 → personal）。
 | P5-04 | `memoryhub backup`：本地 commit + 可选远端 | ✅ 完成 |
+| P5-06 | `memoryhub sync`：把库投影回各 AI 的受管区块 | ✅ 完成（ADR-019） |
 
 **P5-04 实际落地**：`memoryhub backup [--remote NAME] [--allow-sensitive]`。
 

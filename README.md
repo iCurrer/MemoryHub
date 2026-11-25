@@ -2,7 +2,7 @@
 
 跨 AI 工具的个人记忆治理层。本地优先、可审计、可迁移。
 
-> **状态：阶段 1 / 1.5 / 2 / 4 / 5 完成，阶段 3 部分完成（AI 整理、冲突检测），阶段 6 未开始。尚未发布。**
+> **状态：阶段 1 / 1.5 / 2 / 4 / 5 完成（含回写分发），阶段 3 部分完成（AI 整理已通、冲突判定层待重做），阶段 6 未开始。尚未发布。**
 > 现在可以：从三个来源采记忆 → 人工审核 → 落 Markdown 库 → 检出互相矛盾的条目并建立取代链 → 通过 CLI 或 MCP 检索。
 > 语义去重、摘要字段与 Web 界面**还没有**。请勿当作日常工具依赖。
 
@@ -84,6 +84,20 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 - 四道闸：两个 id 必须存在、取代方必须已批准且未过期（否则旧条目归档后事实就从库里消失）、已被取代的不能重复取代、不许成环
 - 旧条目正文超过 200 字时额外警告「这条可能不止一件事」—— 归档一条混装记忆会连带藏掉它剩下的内容，先拆分更稳
 
+> **2026-11-25 真实模型实测不合格，别照着 `--ai` 的输出执行 `supersede`。** 它漏掉了库里唯一那对真实冲突，
+> 并把一条汇总条目（项目 + 兴趣 + 口径）判成与 6 条独立记忆「重复」—— 照做会连带删掉无关内容。
+> 机制（提案不写库、逐字证据、四道闸）是对的，判定层要重做。细节见 ADR-018 末节。
+
+**回写分发（P5-06）**
+
+- `memoryhub sync` 把当前有效记忆投影成一块「受管区块」，写进各 AI 自己的记忆文件
+- 只动 `<!-- MEMORYHUB:BEGIN -->` 与 `<!-- MEMORYHUB:END -->` 之间；**区块外一个字节不碰**，删掉区块即完全还原
+- 目标：`~/.claude/CLAUDE.md`、`~/.workbuddy/user-*/MEMORY.md`、`~/.codex/AGENTS.md`（缺失则新建）；
+  路径与采集适配器共用 `CLAUDE_HOME` / `CODEX_HOME` / `WORKBUDDY_HOME`，**读哪写哪**
+- 默认只出计划，`--write` 才落盘：写前备份 `*.bak-memoryhub-<时间戳>`，写后回读校验区块是否完整
+- 导入时**先剥掉区块**再解析，否则同步会变成下一次导入的输入，库会慢慢填满自己的副本
+- 只投影 `approved` 且未过期、未被取代的条目；`pending` 是提案，`superseded` 是历史，都不该分发给读者
+
 **MCP（5 个工具，stdio）**
 
 - `memory_search` / `memory_get` / `memory_list`：只返回**已批准且未过期**的条目，每条带来源与有效期
@@ -95,12 +109,12 @@ MemoryHub 的着力点是**其余方案都空着的那一格：治理**。具体
 
 **其他**
 
-- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `review` `conflicts` `supersede` `sensitivity` `backup` `stats`
+- CLI：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `sync` `list` `show` `search` `approve` `reject` `review` `conflicts` `supersede` `sensitivity` `backup` `stats`
 - **索引**：SQLite FTS5 + trigram，中文可检索；删掉 `database/index.db` 会自动重建，结果不变
 - **审核流**：`diff` 自动配对同来源条目并显示差异；`approve --all` 批量批准，`blocked` 永不被批量绕过
 - **变更回看**：`log --since 7d` 直接读 vault 的 git 历史，列出新增/修改/删除的条目
 - 保存前校验快照是否过期（`StaleEntryError`），不会把已批准的条目误降级
-- 293 个单元测试（含 38 个冲突/取代、32 个 CLI 端到端、11 个 watcher、9 个索引、19 个 MCP 含真实 stdio 会话），全部通过
+- 311 个单元测试（含 38 个冲突/取代、18 个回写分发、32 个 CLI 端到端、11 个 watcher、9 个索引、19 个 MCP 含真实 stdio 会话），全部通过
 
 > **依赖**：`pyyaml` 与 `mcp`。阶段 1 曾零依赖；P2-01（真 YAML）与 P5-01（MCP）各引入一个，代价与复审时点见 ADR-005、ADR-012。
 
@@ -141,10 +155,15 @@ PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub search "论文"
 PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub recategorize          # dry run
 PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub recategorize --apply
 
-# 8. 让别的 AI 客户端来查（stdio，前台阻塞）
+# 8. 回写给各 AI：先看计划，确认后加 --write
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub sync --list
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub sync --diff
+PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub sync --write
+
+# 9. 让别的 AI 客户端来查（stdio，前台阻塞）
 PYTHONPATH=src .venv/Scripts/python.exe -m memoryhub mcp
 
-# 9. 跑测试
+# 10. 跑测试
 PYTHONPATH=src .venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
