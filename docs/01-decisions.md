@@ -744,6 +744,6 @@ roadmap 原本把 Web UI 排在阶段 6，门禁写的是「作者自用满一�
 - `--label` 依赖用户在每个客户端配置里各写一次。不写就是 `unlabeled`，日志依然有用（能看出「有人在读」），但分不清是谁。
 - `memory_profile` 默认只回 12 条，真库 13 条 profile 会被截断（`truncated=true`）。这是有意的：一次性把 59 条全灌进上下文，会挤掉真正要处理的任务。
 
-**实测**（2026-11-25，真实库 `D:/my-memory`）：真 stdio 会话下 `memory_profile` 回 12/13、`memory_project_context("MemoryHub")` 回 4 条（其中 1 条靠 tags 命中）、`memory_recent_decisions` 回 15 条按决策日期倒序；`memoryhub access` 读到 `3 calls / 19 distinct entries / labels claude-code`。402 个测试全过（`tests/test_access.py` 14 例、`tests/test_mcp.py` 34 例）。
+**实测**（2026-11-25，真实库 `D:/my-memory`）：真 stdio 会话下 `memory_profile` 回 12/13、`memory_project_context("MemoryHub")` 回 4 条（其中 1 条靠 tags 命中）、`memory_recent_decisions` 回 15 条按决策日期倒序；`memoryhub access` 读到 `3 calls / 19 distinct entries / labels claude-code`。403 个测试全过（`tests/test_access.py` 14 例、`tests/test_mcp.py` 34 例）。
 
 **复审时点**：当有人问「这条记忆为什么会被这条 AI 读到」时。那时日志不够——它只说明读过，不说明是哪个查询把它捞出来的，而查询词是我们主动不记的。届时的选择是把查询词加回来（并接受它是一份意图记录），还是把检索过程做成可回放（成本高一个数量级）。在那之前，别为这个问题提前加字段。

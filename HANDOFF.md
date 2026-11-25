@@ -8,7 +8,7 @@
 
 ## 1. 一句话现状
 
-**闭环已合上：三个来源（WorkBuddy / Claude Code / Codex）→ 整理 →（可选）审核 → vault → CLI / MCP 检索 → 回写各 AI 的记忆。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 按 `--permission` 分级暴露 6–7 个工具（含三个上下文捷径），**`sync` 把当前有效记忆投影回三个工具各自的受管区块**，`backup` 带敏感闸门，**`serve` 开一个本机页面把两个队列摆出来**。**402 个单元测试全过。** 冲突检测（P3-05）当天完成了两轮：机制落地后接真实端点发现判定层不合格，随即重做为**片段级逐对判定 + 主题锚点召回**，真实库产出 24 条提案（20 重复 / 4 矛盾）全部带可定位证据。`supersede` 仍是唯一写入口（四道闸，禁环）。**未做：语义去重（P3-04）、P3-00 fallback 显式化、阶段 6 打包与托盘、P2-03b、Codex 记忆层、合成层（P3-03 摘要）。**
+**闭环已合上：三个来源（WorkBuddy / Claude Code / Codex）→ 整理 →（可选）审核 → vault → CLI / MCP 检索 → 回写各 AI 的记忆。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 按 `--permission` 分级暴露 6–7 个工具（含三个上下文捷径），**`sync` 把当前有效记忆投影回三个工具各自的受管区块**，`backup` 带敏感闸门，**`serve` 开一个本机页面把两个队列摆出来**。**403 个单元测试全过。** 冲突检测（P3-05）当天完成了两轮：机制落地后接真实端点发现判定层不合格，随即重做为**片段级逐对判定 + 主题锚点召回**，真实库产出 24 条提案（20 重复 / 4 矛盾）全部带可定位证据。`supersede` 仍是唯一写入口（四道闸，禁环）。**未做：语义去重（P3-04）、P3-00 fallback 显式化、阶段 6 打包与托盘、P2-03b、Codex 记忆层、合成层（P3-03 摘要）。**
 
 **读取日志（P5-07，ADR-021）**：每次 MCP 读调用往 `logs/access.jsonl` 追加一行（工具 / 条目 id / 权限 / 标签），`memoryhub access` 与 `--entry <id>` 读它。标签来自客户端配置里的 `--label`，**不读 MCP 自报的 `clientInfo`**；**不记查询词**（搜索串比答案更暴露）；1 MiB 轮转、写失败绝不断读。同日新增 `memory_profile` / `memory_project_context` / `memory_recent_decisions` 三个读工具——「自己调三次 list 再合并」是 AI 一定会做错的指令。
 
