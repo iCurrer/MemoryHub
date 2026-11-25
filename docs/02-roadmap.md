@@ -217,15 +217,26 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 
 ## 阶段 3 · AI 整理（仅产出提案）
 
+> **2026-11-25 调整**：审计实测规则分类整体 52.8%（`docs/04-classify-audit.md`、ADR-015），
+> 「AI 可延后」的前提不再成立。新增 P3-00，并把 P3-03 的范围从「全量分类」收窄到「规则自认没把握的部分」。
+> 顺序也从「分类优先」改为「拆分优先」——7 条 mixed 证明切不细就必错。
+
 | 工单 | 内容 | 落位 | 完成判据 |
 |---|---|---|---|
+| P3-00 | `classify` 无信号时返回 `unknown` 而非静默返回 `default`；`unknown` 强制进判定队列 | `classify.py` / `cli.py` | 审计脚本「no signal」桶从 7.7% 蒙对变为显式 `unknown`；22.6% 的静默误判消失。**不依赖 AI，可先做** |
 | P3-01 | Provider 抽象（OpenAI 兼容 / 自定义 Base URL），未配置时整体跳过 | `ai/provider.py` | 无 API 时全部功能仍可用（回归测试） |
-| P3-02 | Pydantic 校验 AI 结构化输出 | `ai/schema.py` | 返回非法 JSON / 缺字段时被拒绝且给出原因 |
-| P3-03 | 分类与摘要 | `ai/classify.py` | 产出 `category` 与摘要，`status` 恒为 `pending` |
+| P3-02 | 结构化输出校验（不引入 Pydantic，保持零第三方依赖，见 ADR-005） | `ai/schema.py` | 返回非法 JSON / 缺字段时被拒绝且给出原因 |
+| P3-03 | **拆分优先**：先判定「这段里有几个独立事实」并给出切分建议；再对规则覆盖不到的条目（fallback + keyword 两类，实测 35.8%）做分类与摘要 | `ai/split.py` / `ai/classify.py` | 切分建议不自动改文件，只产提案；分类产出 `status` 恒为 `pending` |
 | P3-04 | 语义去重 | `ai/dedupe.py` | 近似条目产出合并建议，不自动合并 |
 | P3-05 | 冲突检测与取代链维护 | `ai/conflict.py` | 矛盾条目产出 `conflicts/` 记录 + 建议 `supersedes`，**不自动写入** |
 
 **阶段 3 硬约束**：AI 产出的一切写入 `inbox/`，`status=pending`，绝不直接落 `vault/`。
+
+**阶段 3 验收基线**：P3-03 落地后用 `python tools/audit_classify.py --vault <vault> --min-accuracy 0.85`
+复测。这是本阶段唯一可量化的成败判据——没有它，"AI 比规则好"只是又一次判断。
+
+**关于 P3-02 的实现方式**：原 `Pydantic 校验` 与 ADR-005「阶段 1 零第三方运行时依赖」冲突，改为手写 schema 校验。
+若确实需要 Pydantic，应先提 ADR 推翻 ADR-005，而不是顺手加依赖。
 
 ---
 
