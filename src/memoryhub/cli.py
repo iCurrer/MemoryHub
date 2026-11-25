@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import __version__, boundary, config
+from . import __version__, boundary, config, review
 from .adapters import ADAPTERS, build
 from .ai import AIConfig, AIError, Provider, organize
 from .backup import (
@@ -208,7 +208,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "mcp visibility",
             "WARN",
             f"0 of {len(entries)} entries approved — MCP search/list will return "
-            "nothing until you review some",
+            "nothing until you review some (`memoryhub review`)",
         )
     else:
         add("mcp visibility", "OK", f"{approved} of {len(entries)} entries approved")
@@ -674,6 +674,29 @@ def cmd_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    """Review pending proposals one screen at a time (P4-05)."""
+    store = _store(args)
+    # Refusing here is the point: without a terminal the loop would read EOF,
+    # decide nothing, and look like it worked. Scripts have `approve --all`.
+    if not sys.stdin.isatty():
+        print("error: `review` needs a terminal (stdin is not a TTY)", file=sys.stderr)
+        print(
+            "hint: for scripts use `memoryhub list --status pending` then `memoryhub approve <id>`",
+            file=sys.stderr,
+        )
+        return 2
+    outcome = review.run(
+        store,
+        sys.stdin,
+        sys.stdout,
+        sys.stderr,
+        limit=args.limit,
+        reset_skips=args.reset,
+    )
+    return 1 if outcome.errors else 0
+
+
 def cmd_log(args: argparse.Namespace) -> int:
     """Summarise what changed in the vault, from its own git history (P4-03)."""
     store = _store(args)
@@ -1020,8 +1043,8 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[vault_arg],
         description="Cross-AI personal memory governance layer (local-first).",
         epilog=(
-            "五条主线：init 建库 · import 导入（--ai 交给模型整理）· approve 审核通过 · "
-            "mcp 对外服务 · doctor 体检。\n"
+            "主线六条：init 建库 · import 导入（--ai 交给模型整理）· review 逐条审核 · "
+            "approve 按 id/批量通过 · mcp 对外服务 · doctor 体检。\n"
             "审核辅助仍可用但不占主屏：list show search diff reject，"
             "以及其他高级命令（memoryhub <命令> --help）。"
         ),
@@ -1031,9 +1054,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        # Keep the usage line in step with the five-command table below; the
+        # Keep the usage line in step with the six-command table below; the
         # default metavar would enumerate all 20 verbs and undo the whole point.
-        metavar="{init,import,approve,mcp,doctor}",
+        metavar="{init,import,approve,review,mcp,doctor}",
     )
 
     p_init = sub.add_parser(
@@ -1241,6 +1264,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_ok.add_argument("--dry-run", action="store_true", help="list what would be approved")
     p_ok.set_defaults(func=cmd_approve)
 
+    p_review = sub.add_parser(
+        "review",
+        parents=[vault_arg],
+        help="review pending proposals one screen at a time",
+        description=(
+            "Walk the pending queue one entry per screen. Keys: a approve, "
+            "r reject, c change category, s skip (ask again next run), q quit. "
+            "Progress is resumable: decided entries leave the queue by changing "
+            "status, and skips are remembered in the config directory."
+        ),
+    )
+    p_review.add_argument("--limit", type=int, default=None, help="stop after N entries")
+    p_review.add_argument(
+        "--reset", action="store_true", help="forget previously skipped entries"
+    )
+    p_review.set_defaults(func=cmd_review)
+
     p_no = sub.add_parser(
         "reject", parents=[vault_arg], help="reject a pending proposal"
     )
@@ -1252,12 +1292,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_stats.set_defaults(func=cmd_stats)
 
-    #: Five commands carry the product; the rest are reachable but off the first
+    #: Six commands carry the product; the rest are reachable but off the first
     #: screen. 20 verbs in `--help` is a large part of why the tool reads as
     #: complicated -- see docs/04-classify-audit.md for what the code actually is.
     #: ``_choices_actions`` is the table argparse renders for subcommands; entries
     #: are removed in place (not help=SUPPRESS, which prints the literal word).
-    mainline = {"init", "import", "scan", "approve", "mcp", "doctor"}
+    mainline = {"init", "import", "scan", "approve", "review", "mcp", "doctor"}
     sub._choices_actions[:] = [
         action for action in sub._choices_actions if action.dest in mainline
     ]

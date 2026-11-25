@@ -253,6 +253,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 | P4-01 | 差异预览：`memoryhub diff <id>` 对比提案与现有条目 | ✅ 完成 |
 | P4-02 | 批量操作：`inbox list --auto` / 批量 approve | ✅ 完成（`approve --all` + `--category` / `--tag` / `--dry-run`） |
 | P4-03 | 变更摘要：`memoryhub log --since 7d` | ✅ 完成 |
+| P4-05 | 交互式审核：`memoryhub review`，一屏一条 | ✅ 完成（**2026-11-25 新增工单**，见下） |
 
 **P4-01 实际落地**：`diff <id>` 默认自动配对 —— 取**同一 `source_path` 的最新已批准条目**作为对比对象，
 输出元信息（状态/类别/信任/来源/时间）+ 统一 diff；`--against <id>` 可显式指定；无配对时打印正文并说明原因。
@@ -260,8 +261,21 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 **P4-02 实际落地**：`approve --all`，可按 `--category` / `--tag` 过滤，`--dry-run` 只列出。
 **blocked 永远跳过**（打印到 stderr），不因为批量操作就绕过 ADR-003。
 
-**P4-03 实际落地**：`src/memoryhub/backup/history.py` + `memoryhub log`。
+**P4-05 实际落地**：`src/memoryhub/review.py` + `memoryhub review`（**2026-11-25 新增**，原路线图没有这张工单）。
 
+- 起因是实测断点：53 条 `pending`、`approved` 为 0，MCP 对外恒为空。瓶颈不是缺能力，是
+  `approve` 要求你先知道 id —— 读列表、滚动、复制 32 位标识符，重复 53 次。每一步都是"改天再说"的理由。
+- 一屏一条，按键 `a` 批 / `r` 拒 / `c` 改分类 / `s` 跳过 / `q` 退出。改分类后**同一条重新显示**再决策，
+  避免"改了但没看清就批"。
+- **队列每次从 vault 重新推导，只有"跳过的 id"被记住**（ADR-017）。存整条队列会让过期状态文件
+  有能力藏掉提案或复活已删除的条目，而可推导的东西不该存两份。
+- 跳过状态放在配置目录（`~/.memoryhub/review.json`），**不放进 vault** —— vault 里只应有记忆，
+  且 cursor 文件会在 `git commit` 里变成 diff。
+- `blocked` 条目在界面上直接标明"改分类也解除不了"，只允许 `r`/`s`，不让用户白点一次 `a`。
+- 非 TTY 一律拒绝（exit 2）并指向 `approve <id>`：没有终端的循环会读到 EOF，什么也没决定，却看起来成功了。
+- 退出时打印本次操作的 id 清单，误按可用 `memoryhub reject <id>` 撤销。
+
+**P4-03 实际落地**：`src/memoryhub/backup/history.py` + `memoryhub log`。
 - 历史来源是 **vault 自己的 git log**，不另建变更日志 —— `git log` 就是 ADR-003 依赖的回滚依据，
   另建一份必然与它不一致；也避免在 vault 里多出一个"不是记忆"的文件。
 - `--since` 支持 `7d` / `12h` / `2w` / ISO 日期，翻译成 git 的 `--since`。

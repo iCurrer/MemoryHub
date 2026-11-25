@@ -8,11 +8,13 @@
 
 ## 1. 一句话现状
 
-**三个来源（WorkBuddy / Claude Code / Codex）→ 整理 → 审核 → vault → CLI / MCP 检索，全链路已通。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`diff`/`approve` 审核入库，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**213 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：语义去重与冲突检测（P3-04/05）、P3-00 fallback 显式化、回写分发、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+**三个来源（WorkBuddy / Claude Code / Codex）→ 整理 → 审核 → vault → CLI / MCP 检索，全链路已通。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**235 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：语义去重与冲突检测（P3-04/05）、P3-00 fallback 显式化、回写分发、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
 
 **AI 整理怎么工作（ADR-016）**：`Adapter.discover()` 仍是算法（找文件是确定的）；`read()` 在 `--ai` 模式改走模型（拆分 + 分类是语义的）；模型返回的每一条必须带从原文逐字复制的 `quote`，归一化后定位不到就标记待核实。**这条 quote 校验是唯一能自动化的防幻觉手段，不要删。**
 
-**当前最大断点（2026-11-25）**：`D:/my-memory` 里 53 条全是 `pending`，`approved` 为 0。MCP 的可见性规则（ADR-012）只返回 `approved`，所以**别的 AI 现在查不到任何东西**。`doctor` 的 `mcp visibility` 会明确报这一条。下一步不是加功能，是让人把这 53 条审完——或者先做 P4-05 交互式审核。
+**审核怎么工作（ADR-017）**：`review` 一屏一条，按键 `a` 批 / `r` 拒 / `c` 改分类 / `s` 跳过 / `q` 退出。**队列每次从 vault 重新推导，只有"跳过的 id"被记住**（存 `~/.memoryhub/review.json`，不在 vault 内）。非 TTY 一律拒绝并指向 `approve <id>`。
+
+**当前最大断点（2026-11-25）**：`D:/my-memory` 里 53 条全是 `pending`，`approved` 为 0。MCP 的可见性规则（ADR-012）只返回 `approved`，所以**别的 AI 现在查不到任何东西**。工具已经就位（`python -m memoryhub review --vault D:/my-memory`），剩下的纯粹是需要人坐下来把 53 条审完——这一步没有任何代码能替代。
 
 ## 2. 仓库信息
 
@@ -61,7 +63,8 @@
 | `tools/audit_classify.py` | 规则分类对账：三层准确率 + 混淆矩阵，`--min-accuracy` 可作 CI 门禁 | 稳定，标注文件在 `docs/audits/` |
 | `tools/lint_staged.py` | 暂存内容 + 提交信息的路径/PII 扫描；`--all` 全量、`--message-only` | 稳定（ADR-013） |
 | `tools/hooks/` + `tools/setup_dev.sh` | `core.hooksPath` 钩子，clone 后跑一次 | 稳定；新增规则改 `RULES` 与 `pii-allowlist.txt` |
-| `src/memoryhub/cli.py` | **五条主线**：`init` `import` `approve` `mcp` `doctor`；其余命令保留但移出帮助表 | 稳定（ADR-016） |
+| `src/memoryhub/cli.py` | **六条主线**：`init` `import` `review` `approve` `mcp` `doctor`；其余命令保留但移出帮助表 | 稳定（ADR-016、ADR-017） |
+| `src/memoryhub/review.py` | 交互式审核：队列从 vault 推导、跳过游标存配置目录、非 TTY 拒绝 | 稳定（ADR-017） |
 | `tests/test_store.py` | 37 个用例 | 会随功能增长 |
 | `tests/test_cli.py` | 38 个端到端用例（含审核流、帮助页收窄、`--ai` 错误路径） | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
 | `tests/test_adapters.py` | 33 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude + Codex 适配器 |
@@ -72,13 +75,14 @@
 | `tests/test_backup.py` | 8 个用例 | 本地提交 / 远端推送敏感闸门 / .gitignore |
 | `tests/test_safety.py` | 6 个用例 | 凭证与 PII 分级 |
 | `tests/test_ai.py` | 27 个用例 | 假传输桩：提示词契约、JSON 提取、逐条校验、quote 定位、配置读取 |
+| `tests/test_review.py` | 22 个用例 | 队列顺序、跳过持久化、断点续审、改分类、blocked 拦截、EOF、非 TTY 拒绝 |
 | `tests/test_boundary.py` | 15 个用例 | 两仓隔离：vault 在 git 树内即拒、pre-push 钩子、远端 URL 判定 |
 | `tests/test_classify.py` | 15 个用例 | 加权规则、决定性权重、平票优先级 |
 | `tests/test_migrate.py` | 5 个用例 | 长条目切分三级回退、空标题剔除 |
 
-可用命令（帮助页只列前五条，其余仍可调用）：
+可用命令（帮助页只列前六条，其余仍可调用）：
 
-`init` `import`（别名 `scan`，加 `--ai` 走模型）`approve` `mcp` `doctor` ｜ 审核辅助：`list` `show` `search` `diff` `reject` ｜ 高级：`new` `watch` `index` `audit` `log` `sensitivity` `recategorize` `backup` `stats`
+`init` `import`（别名 `scan`，加 `--ai` 走模型）`review`（逐条审）`approve` `mcp` `doctor` ｜ 审核辅助：`list` `show` `search` `diff` `reject` ｜ 高级：`new` `watch` `index` `audit` `log` `sensitivity` `recategorize` `backup` `stats`
 
 本轮新增的行为（都带测试）：
 
@@ -99,13 +103,17 @@ cd /d/project/MemoryHub
 pip install pyyaml mcp      # 运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 Ran 213；缺 mcp 时 1 error（test_mcp 导入），212 通过
+python -m unittest discover -s tests -v          # 期望 Ran 235；缺 mcp 时 1 error（test_mcp 导入），234 通过
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
 python -m memoryhub scan --vault /tmp/v --dry-run # 期望列出发现的来源与将导入条数
+python -m memoryhub review --vault /tmp/v          # 需真终端；一屏一条，a/r/c/s/q
 python -m memoryhub mcp --vault /tmp/v            # 阻塞，等 MCP 客户端连上来
 ```
+
+`review` 在管道里跑会直接 exit 2 并提示改用 `approve <id>` —— 这是有意的，
+没有终端的循环会读到 EOF、什么也没决定、退出码却是 0。
 
 注意：`doctor` 在**未 init 的仓上应返回 1**（vault 与 layout 缺失是 FAIL），这是正确行为。
 `init --no-git` 之后应为 exit 0 —— 这是本轮修掉的门禁矛盾。
@@ -155,7 +163,7 @@ Claude Desktop 放在 `%APPDATA%\Claude\claude_desktop_config.json`；Cursor 放
 
 ## 7. 决策边界（改之前必须看）
 
-不可推翻的决策在 `AGENTS.md`（7 条）与 `docs/01-decisions.md`（ADR-001 至 ADR-016，其中 ADR-010 / ADR-011 / ADR-015 的三项变更待拍板）。最容易被误做的三条：
+不可推翻的决策在 `AGENTS.md`（7 条）与 `docs/01-decisions.md`（ADR-001 至 ADR-017，其中 ADR-010 / ADR-011 / ADR-015 的三项变更待拍板）。最容易被误做的三条：
 
 1. **不要实现"把中央记忆写回各 AI 工具"** —— 这是策划书原方案，已否决（ADR-002）。看到 `exports/` 就想"顺手写回去"是本项目第一大坑。
 2. **不要让 AI 产出直接进 `vault/`** —— 必须 `status=pending`，`review` 级别要人批（ADR-003，本轮已把 `--approve` 的绕过口封上）。
@@ -167,14 +175,17 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 
 ## 8. 下一步
 
-采集、整理（单向）、审核、检索、备份已闭环。**当前真正的拦路虎不是缺功能，是 53 条 `pending` 一条都没批**，导致 MCP 对外恒为空。按优先级：
+采集、整理（单向）、审核、检索、备份已闭环。**当前断点是「0 条 approved」，工具已就位，缺的是人坐下来审**。按优先级：
 
-1. **P4-05 交互式审核**（一屏一条，按键 `批 / 拒 / 改分类 / 跳`，可中断续审）。这是唯一能解开 §1 断点的工单，不做它，后面所有能力都没有用户。
-2. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。
-3. **P3-04 → P3-05 语义去重与冲突检测**：审计数据证明这两项对 AI 的依赖度最高（改错分类 1 秒，判断"是否同一件事"要 1 分钟），应排在 P3-03 的摘要之前。
+1. **把 53 条审完**：`python -m memoryhub review --vault D:/my-memory`。这不是工单，是使用——但只有它能让 §1 的断点消失。
+2. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。**唯一一项还没拍板就能做的。**
+3. **P3-04 → P3-05 语义去重与冲突检测**：审计数据证明这两项对 AI 的依赖度最高（改错分类 1 秒，判断"是否同一件事"要 1 分钟）。
 4. **P3-03 余下部分**：摘要字段（拆分与分类已通）。
 5. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
 6. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。
+
+**已知缺口（不是 bug，是没做）**：`review` 没有 `u` 撤销上一步，误按只能靠退出时打印的 id 清单
+手工 `reject <id>` 补救。若真实使用中出现"想回头改上一条"的抱怨，再加（ADR-017 复审时点）。
 
 **AGENTS 契约已同步**（2026-11-25，经所有者批准）：当前阶段、决策 6 限定输出侧、决策 7 依赖从严、目录职责、测试依赖说明。
 
