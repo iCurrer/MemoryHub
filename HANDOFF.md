@@ -8,7 +8,7 @@
 
 ## 1. 一句话现状
 
-**闭环已合上：三个来源（WorkBuddy / Claude Code / Codex）→ 整理 →（可选）审核 → vault → CLI / MCP 检索 → 回写各 AI 的记忆。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 按 `--permission` 分级暴露 4–5 个工具，**`sync` 把当前有效记忆投影回三个工具各自的受管区块**，`backup` 带敏感闸门。**311 个单元测试全过。** 冲突检测（P3-05）机制已落地：`conflicts --ai` 只产提案，`supersede` 是唯一写入口（四道闸，禁环）；**但判定层在真实语料上不合格，见下节**。**未做：语义去重（P3-04）、P3-00 fallback 显式化、冲突判定层重做、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+**闭环已合上：三个来源（WorkBuddy / Claude Code / Codex）→ 整理 →（可选）审核 → vault → CLI / MCP 检索 → 回写各 AI 的记忆。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`review` 一屏一条人工过审，`diff`/`approve` 处理单条与批量，`search` 走 SQLite FTS5 索引，`mcp` 按 `--permission` 分级暴露 4–5 个工具，**`sync` 把当前有效记忆投影回三个工具各自的受管区块**，`backup` 带敏感闸门。**313 个单元测试全过。** 冲突检测（P3-05）机制已落地：`conflicts --ai` 只产提案，`supersede` 是唯一写入口（四道闸，禁环）；**但判定层在真实语料上不合格，见下节**。**未做：语义去重（P3-04）、P3-00 fallback 显式化、冲突判定层重做、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
 
 **冲突判定层实测不合格（2026-11-25，接真实 DeepSeek 端点后）**：50 条 8.5k 字跑出 15 对提案，三处硬伤——① 漏掉库里唯一那对真实冲突（`782bcbcf` 论文题目未定 vs `e6e751a1` 已定题目）；A/B 实测仅 8 条无关条目就能让它消失；只给两条时虽会报，但 **winner 判反**（按 `created_at` 认「晚录入」为「更新」）；② 把汇总条目 `617c26b0`（项目 + 兴趣 + 口径）判成与 6 条独立记忆「重复」，照做会连带删掉无关内容；③ 换 `deepseek-reasoner` 复跑，3 对全属同类误报，仍漏目标对。**所以 `conflicts --ai` 的输出只能当线索，不要照着执行 `supersede`。**
 
@@ -97,7 +97,7 @@
 | `tests/test_safety.py` | 6 个用例 | 凭证与 PII 分级 |
 | `tests/test_ai.py` | 27 个用例 | 假传输桩：提示词契约、JSON 提取、逐条校验、quote 定位、配置读取 |
 | `tests/test_review.py` | 23 个用例 | 队列顺序、跳过持久化、断点续审、改分类、blocked 拦截、EOF、Ctrl-C、非 TTY 拒绝 |
-| `tests/test_sync.py` | 18 个用例 | 标记剥离与替换、渲染确定性、备份、`--write` 幂等、**导入不吃回区块**（EchoChamberTests） |
+| `tests/test_sync.py` | 20 个用例 | 标记剥离与替换、渲染确定性、备份、`--write` 幂等、**导入不吃回区块**（EchoChamberTests） |
 | `tests/test_conflicts.py` | 38 个用例 | 分批不丢条目、逐条校验、证据定位失败降级、提案不入库、四道闸、禁环、真实 HTTP 端到端 |
 | `tests/test_boundary.py` | 15 个用例 | 两仓隔离：vault 在 git 树内即拒、pre-push 钩子、远端 URL 判定 |
 | `tests/test_classify.py` | 15 个用例 | 加权规则、决定性权重、平票优先级 |
@@ -126,7 +126,7 @@ cd /d/project/MemoryHub
 pip install pyyaml mcp      # 运行时依赖
 export PYTHONPATH=src
 
-PYTHONPATH=src .venv/Scripts/python.exe -m unittest discover -s tests -v   # 期望 Ran 311, OK
+PYTHONPATH=src .venv/Scripts/python.exe -m unittest discover -s tests -v   # 期望 Ran 313, OK
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）

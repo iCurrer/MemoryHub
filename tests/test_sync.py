@@ -149,6 +149,32 @@ class PlanAndWriteTests(unittest.TestCase):
         assert saved is not None
         self.assertEqual(saved.read_text(encoding="utf-8"), "# 我自己的规则\n\n不要改我。\n")
 
+    def test_second_plan_is_stable_even_across_seconds(self) -> None:
+        """Re-planning an unchanged vault must not look like a change.
+
+        The first version compared blocks containing a fresh timestamp, so every
+        run rewrote every file and dropped a backup. It looked fine in tests only
+        because both runs happened within the same second.
+        """
+        entry = make("内容")
+        entry.status = "approved"
+        first = sync.plan([entry], [self.target()], synced_at="2026-11-25T10:00:00+08:00")[0]
+        sync.write(first)
+        later = sync.plan([entry], [self.target()], synced_at="2026-11-26T11:11:11+08:00")[0]
+        self.assertFalse(later.changes)
+        self.assertIn("2026-11-25T10:00:00+08:00", later.after)
+        self.assertNotIn("2026-11-26T11:11:11+08:00", later.after)
+
+    def test_changed_content_updates_the_stamp(self) -> None:
+        entry = make("旧内容")
+        entry.status = "approved"
+        sync.write(sync.plan([entry], [self.target()], synced_at="2026-11-25T10:00:00+08:00")[0])
+        entry.body = "新内容"
+        later = sync.plan([entry], [self.target()], synced_at="2026-11-26T11:11:11+08:00")[0]
+        self.assertTrue(later.changes)
+        self.assertIn("新内容", later.after)
+        self.assertIn("2026-11-26T11:11:11+08:00", later.after)
+
     def test_write_twice_leaves_one_block(self) -> None:
         entry = make("内容")
         entry.status = "approved"

@@ -616,7 +616,7 @@
 - 被取代的条目不会出现在区块里，所以**在分发侧看不到历史**。要看历史回 vault，`--include-expired`。
 - 新建 `~/.codex/AGENTS.md` 会让 Codex 从此有一条它原来没有的指令。这是目标而不是副作用，但必须说清楚它发生了。
 
-**实测**（2026-11-25）：311 个测试（`tests/test_sync.py` 18 例）全过。真实库写入三个目标后立刻跑 `import`：
+**实测**（2026-11-25）：313 个测试（`tests/test_sync.py` 20 例）全过。真实库写入三个目标后立刻跑 `import`：
 
 ```
 claude     CLAUDE.md [global]: 0 new, 25 already present

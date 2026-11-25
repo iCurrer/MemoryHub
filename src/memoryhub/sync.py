@@ -27,6 +27,7 @@ from __future__ import annotations
 import difflib
 import glob as _glob
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -220,14 +221,30 @@ class Plan:
         )
 
 
+_STAMP = re.compile(r"同步于 (\S+)")
+
+
+def _stamp_of(block: str) -> str:
+    match = _STAMP.search(block)
+    return match.group(1) if match else ""
+
+
 def plan(
     entries: Sequence[MemoryEntry],
     targets: Sequence[Target],
     *,
     synced_at: str = "",
 ) -> List[Plan]:
-    """Compute every target's future content without touching disk."""
-    block = render_block(select(entries), synced_at=synced_at)
+    """Compute every target's future content without touching disk.
+
+    The timestamp is the one field that changes on every run, so it is handled
+    separately: if the block would otherwise be identical, the **old** stamp is
+    kept and the target counts as up to date. Without that, every sync rewrites
+    every file, drops a backup, and produces a one-line git diff -- which teaches
+    people to ignore both the diff and the "wrote" line.
+    """
+    fresh = synced_at or now_iso()
+    block = render_block(select(entries), synced_at=fresh)
     plans: List[Plan] = []
     for target in targets:
         chosen, matches = target.resolve()
@@ -247,7 +264,19 @@ def plan(
                      after=managed.replace_block("", block), block=block, note=note)
             )
             continue
+
         before = chosen.read_text(encoding="utf-8", errors="replace")
+        old_block = managed.find_block(before)
+        if old_block is not None:
+            old_stamp = _stamp_of(old_block)
+            if old_stamp:
+                probe = render_block(select(entries), synced_at=old_stamp)
+                if managed.replace_block(before, probe) == before:
+                    plans.append(
+                        Plan(target=target, path=chosen, exists=True, before=before,
+                             after=before, block=probe, note=note)
+                    )
+                    continue
         after = managed.replace_block(before, block)
         plans.append(
             Plan(target=target, path=chosen, exists=True, before=before,
