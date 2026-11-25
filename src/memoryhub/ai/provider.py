@@ -224,5 +224,15 @@ class Provider:
                 if isinstance(part, dict) and part.get("type") in (None, "text")
             )
         if not isinstance(content, str) or not content.strip():
+            # A reasoning model spends the same ``max_tokens`` budget on its
+            # chain of thought first, so a budget that is generous for prose can
+            # leave nothing for the answer. Reporting that as "empty content"
+            # sends the reader looking for a prompt bug that is not there.
+            if first.get("finish_reason") == "length":
+                raise AIError(
+                    "模型在写出答案前就用完了 max_tokens（finish_reason=length）。\n"
+                    "推理模型会先把配额花在思维链上：把配置里的 [ai] max_tokens 调大"
+                    "（例如 32768），或换用非推理模型。"
+                )
             raise AIError("模型返回了空内容")
         return content

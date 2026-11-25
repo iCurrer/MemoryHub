@@ -13,7 +13,16 @@ from typing import List, Optional, Tuple
 
 from . import __version__, boundary, config, conflicts, review, sync
 from .adapters import ADAPTERS, build
-from .ai import AIConfig, AIError, Provider, detect, looks_mixed, organize
+from .ai import (
+    DEFAULT_MAX_PAIRS,
+    PER_ENTRY_PAIR,
+    AIConfig,
+    AIError,
+    Provider,
+    detect,
+    looks_mixed,
+    organize,
+)
 from .ai.conflict import RELATION_LABELS
 from .backup import (
     GitUnavailable,
@@ -710,17 +719,72 @@ def _print_record(store: VaultStore, record: dict, *, detail: bool = False) -> N
         quote = evidence.get(entry_id)
         if detail and quote:
             print(f"    证据（逐字）: {quote}")
+
+    claims = record.get("claims")
+    if isinstance(claims, list) and claims and detail:
+        print("  冲突的片段:")
+        for item in claims:
+            if not isinstance(item, dict):
+                continue
+            left = str(item.get("quote_left") or "").strip() or "(无引用)"
+            right = str(item.get("quote_right") or "").strip() or "(无引用)"
+            mark = "" if item.get("verified") else "  [未核实]"
+            print(f"    〈{left}〉")
+            print(f"    〈{right}〉  {_relation_label({'relation': item.get('relation')})}{mark}")
+            reason = str(item.get("reason") or "").strip()
+            if reason:
+                print(f"      {reason}")
+
     print(f"  为什么: {record.get('reason') or ''}")
+    relation = str(record.get("relation") or "")
+    partial = str(record.get("scope") or "") == "partial"
+    if partial and relation == "duplicate":
+        print(
+            "  范围: 这条记忆里只有部分片段与对方重复，其余内容与对方无关 —— "
+            "不需要动整条记忆。"
+        )
+    elif partial:
+        print(
+            "  范围: 只有部分片段冲突 —— 这条记忆里其他内容仍然有效，"
+            "直接 supersede 会把它们一起藏起来。先拆分更稳。"
+        )
     winner = record.get("winner")
     if winner:
         print(f"  建议保留: {winner}")
         lost = second if winner == first else first
-        print(f"  落实: memoryhub supersede {lost} --by {winner}")
+        command = f"memoryhub supersede {lost} --by {winner}"
+        print(f"  落实: {command}" + ("   ← 需要你确认范围" if partial else ""))
+    elif str(record.get("relation") or "") == "duplicate":
+        print(
+            "  处置: 同一件事记了两遍，没有对错。留着只是检索时各命中一次；"
+            "要合并就删掉一条，别用 supersede（那会把旧内容标成历史）。"
+        )
     else:
         print("  无人可判胜负，需要你自己决定保留哪条，再发一条新的记忆")
     if detail:
         print(f"  检测于 {record.get('detected_at')}  模型 {record.get('model')}")
     print()
+
+
+def _record_line(store: VaultStore, record: dict) -> list:
+    """Two lines per proposal: what, then why. Bodies belong behind ``--show``.
+
+    With 24 proposals the old version printed every body and scrolled the first
+    screen away -- which is how a listing stops being a listing.
+    """
+    first, second = (str(part) for part in (record.get("pair") or ["?", "?"])[:2])
+    marks = []
+    if str(record.get("scope") or "") == "partial":
+        marks.append("仅部分片段")
+    if record.get("verified") is False:
+        marks.append("证据未核实")
+    head = f"{_relation_label(record):<4} {first}  {second}"
+    if marks:
+        head += "  [" + " / ".join(marks) + "]"
+    reason = " ".join(str(record.get("reason") or "").split())
+    if len(reason) > 96:
+        reason = reason[:93] + "..."
+    return [head, f"     {reason}"]
 
 
 def cmd_conflicts(args: argparse.Namespace) -> int:
@@ -744,8 +808,11 @@ def _conflicts_list(store: VaultStore) -> int:
         )
         return 0
     for record in records:
-        _print_record(store, record)
-    print(f"{len(records)} 条提案，未写入任何 supersedes —— 落实要你自己跑 supersede。")
+        for line in _record_line(store, record):
+            print(line)
+    print()
+    print(f"{len(records)} 条提案，未写入任何 supersedes。")
+    print("看某条的完整正文、逐字证据和该跑的命令：memoryhub conflicts --show <id>")
     return 0
 
 
@@ -799,23 +866,50 @@ def _conflicts_detect(store: VaultStore, args: argparse.Namespace) -> int:
     print(f"冲突检测：{len(pool)} 条已批准记忆，共 {sum(len(e.body) for e in pool):,} 字")
     print(f"  端点  {cfg.base_url}")
     print(f"  模型  {cfg.model}")
-    print("  注意  全部正文会离开本机，发送前不做脱敏。")
     print("  产出  只是提案，不会写入 supersedes。")
-    if not getattr(args, "yes", False):
+    print()
+
+    def planned(stats, count: int) -> bool:
+        """Everything the run costs and everything it will not look at."""
+        for line in stats.lines():
+            print(f"  {line}")
+        if stats.over_limit or stats.crowded_out:
+            print(
+                "  注意  被让位/超限的段对**没有送审**，其中的矛盾不会被报告。"
+                "\n        调大 --max-pairs 可以扩大范围（每多一段对多一次调用）。"
+            )
+        print()
+        print(f"  即将发送 {count} 段对，每对单独一次调用。正文会离开本机，发送前不做脱敏。")
+        if getattr(args, "yes", False):
+            return True
         if not sys.stdin.isatty():
             print(
                 "error: 需要确认。非交互环境下加 --yes，表示已知悉内容会被发送到该端点。",
                 file=sys.stderr,
             )
-            return 1
-        if input("继续？[y/N] ").strip().lower() not in ("y", "yes"):
-            print("已取消，未发送任何内容。")
-            return 1
-    print()
+            return False
+        return input("继续？[y/N] ").strip().lower() in ("y", "yes")
+
+    total = {"count": 0}
+
+    def progress(done: int, count: int, verdict) -> None:
+        total["count"] = count
+        mark = "." if verdict is None or verdict.relation == "none" else "!"
+        sys.stdout.write(mark)
+        if done % 50 == 0 or done == count:
+            sys.stdout.write(f"  {done}/{count}\n")
+        sys.stdout.flush()
 
     provider = Provider(cfg)
     try:
-        result = detect(pool, provider)
+        result = detect(
+            pool,
+            provider,
+            max_pairs=args.max_pairs,
+            per_entry_pair=args.per_pair,
+            on_progress=progress,
+            on_planned=planned,
+        )
     except AIError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -823,9 +917,25 @@ def _conflicts_detect(store: VaultStore, args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"{result.calls} 次调用，{result.chars_sent:,} 字发送，{len(result.pairs)} 对候选")
+    if not result.stats.selected:
+        print("\n没有可比较的段对（条目太少，或彼此毫无共同用词）。")
+        return 0
+    if result.calls == 0:
+        for problem in result.problems:
+            print(f"error: {problem}", file=sys.stderr)
+        print("没有发送任何内容。")
+        return 1
+
+    print()
+    print(
+        f"{result.calls} 次调用，{result.chars_sent:,} 字发送 → "
+        f"{len(result.verdicts) - sum(1 for v in result.verdicts if v.relation == 'none')} 段对判为有关系，"
+        f"合并成 {len(result.pairs)} 个条目对"
+    )
     if not result.pairs:
-        print("模型没有报告冲突。这不等于库里没有矛盾——它只看到了这一批正文。")
+        print(
+            "模型没有报告冲突。这不等于库里没有矛盾——它只看了上面列出的那些段对。"
+        )
     for problem in result.problems[:20]:
         print(f"  ! {problem}")
     if len(result.problems) > 20:
@@ -834,13 +944,15 @@ def _conflicts_detect(store: VaultStore, args: argparse.Namespace) -> int:
         print()
     for pair in result.pairs:
         record = pair.to_record(model=cfg.model)
+        tag = "" if pair.verified else "  [证据未核实]"
+        if pair.scope == "partial":
+            tag += "  [只涉及部分片段：别整条归档]"
         if getattr(args, "dry_run", False):
             print(f"would write  {conflicts.record_path(store.root, pair.a, pair.b).name}  "
-                  f"{_relation_label(record)}")
+                  f"{_relation_label(record)}{tag}")
             continue
         path = conflicts.save_record(store.root, record)
-        print(f"wrote  {path.name}  {_relation_label(record)}"
-              + ("" if pair.verified else "  [证据未核实]"))
+        print(f"wrote  {path.name}  {_relation_label(record)}{tag}")
 
     if getattr(args, "dry_run", False):
         print("\ndry run：没有写任何文件（模型调用已经发生，钱已经花了）")
@@ -1670,18 +1782,35 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[vault_arg],
         help="list conflict proposals; --ai asks the model for new ones (P3-05)",
         description=(
-            "Conflict proposals are suggestions, never writes. --ai sends every "
-            "approved entry to your own model and stores the answer in "
-            "inbox/conflicts/. Nothing reaches the vault until you run "
+            "Conflict proposals are suggestions, never writes. --ai splits every "
+            "approved entry into claims, pairs the ones that share vocabulary, and "
+            "asks your own model about each pair separately (one pair per call, so "
+            "no unrelated entry can dilute it). Answers land in inbox/conflicts/. "
+            "Nothing reaches the vault until you run "
             "`memoryhub supersede <old> --by <new>`. --show <id> prints the "
             "entries behind every proposal mentioning that id."
         ),
     )
     p_conf.add_argument(
-        "--ai", action="store_true", help="run the model over all approved entries"
+        "--ai", action="store_true", help="run the model over the approved entries"
     )
     p_conf.add_argument("--show", metavar="ID", default=None, help="detail for one entry")
     p_conf.add_argument("--category", choices=CATEGORIES, default=None)
+    p_conf.add_argument(
+        "--max-pairs",
+        type=int,
+        default=DEFAULT_MAX_PAIRS,
+        metavar="N",
+        help=f"with --ai: how many claim pairs to send (default {DEFAULT_MAX_PAIRS})",
+    )
+    p_conf.add_argument(
+        "--per-pair",
+        type=int,
+        default=PER_ENTRY_PAIR,
+        metavar="N",
+        help="with --ai: claim pairs per entry pair (default "
+        f"{PER_ENTRY_PAIR}, keeps one verbose entry from flooding)",
+    )
     p_conf.add_argument(
         "--yes", action="store_true", help="with --ai: skip the send confirmation"
     )

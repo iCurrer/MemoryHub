@@ -1,33 +1,35 @@
-"""Find memories that contradict each other, without deciding for the human.
+"""Ask the model whether two specific claims disagree -- nothing more.
 
-The failure this module exists for is already on record: the vault held a
-400-character entry saying "毕业论文（尚未冻结）：先确定题目" next to a 36-character
-entry saying "毕业论文：《基于多 Agent 架构的企业财务共享中心工作流程优化研究》".
-Both were ``approved``, neither superseded the other, and a real Claude session
-read them and could not tell which one still holds. Two contradictory answers
-from the same library is worse than a missing answer.
+The first version sent all 50 approved entries in one prompt and asked it to
+report every conflicting pair. On the real vault it failed in three ways that are
+worth keeping as the design rationale, because each one names a structural cause:
 
-Three design decisions, each made against an alternative:
+1. **It missed the only real conflict.** The 400-character "个人工作台" entry says
+   「毕业论文（尚未冻结）：先确定题目」 and a 36-character entry gives the settled
+   title. Both were in the prompt. The model did not report them. An A/B run
+   showed why: with only those two entries present it reports the pair but picks
+   the *wrong* direction (treating the later ``created_at`` as newer); adding six
+   unrelated entries makes the pair vanish entirely. **Eight entries of context
+   were enough to erase it.** A prompt asking for independence cannot fix that --
+   the fix is that no unrelated entry is ever in the prompt.
 
-1. **The whole approved corpus goes in one prompt, not pairwise.** Pairwise
-   scoring was measured on the real vault: the entry pair above ranks 31st of
-   309 same-category pairs by character-bigram cosine (0.052). A similarity
-   threshold high enough to be useful would have missed the one conflict that
-   actually happened. Judging is semantic, so the comparison has to be too --
-   and 50 approved entries are ~8.5k characters, well inside one call.
+2. **Granularity.** Whole entries were compared to whole entries, so a summary
+   entry that matches six single-fact entries was reported as six duplicates, each
+   advising to archive the summary. ``claims.py`` splits first; this module then
+   compares one claim to one claim.
 
-2. **The model may not write.** It proposes; ``memoryhub conflicts`` prints;
-   ``memoryhub supersede`` writes, and only with two ids a human typed. There is
-   no code path from a model response to a ``supersedes`` field.
+3. **Time semantics.** ``created_at`` is when the memory was *recorded*, not when
+   the fact happened. Any "newer" inference from it is wrong for a late-recorded
+   old fact, which is exactly the paper-title case. So the date is not sent at
+   all, and the prompt names the only admissible evidence of precedence: wording
+   inside the claims themselves (「尚未」 vs 「已定」).
 
-3. **Every claim carries two verbatim quotes, one per side.** Same defence as
-   ``organize.py``: a quote that cannot be located in the entry it cites means
-   the model described something that is not there. An unlocatable proposal is
-   downgraded to ``contradicts`` with no winner -- the pair is still worth a
-   human look, but nothing in it may be presented as a verdict.
+What stays from the first version: the model may not write. It returns a
+judgement about two claims; ``memoryhub supersede`` is still the only path that
+touches ``supersedes``/``valid_until``, and still requires two ids a human typed.
 
-What this cannot do: judge whether a *new* fact is true. It only reports that
-two stored facts disagree.
+What this cannot do: judge whether a fact is true, or read the whole vault. It
+sees one pair at a time and knows nothing about the other 39,998 pairs.
 """
 
 from __future__ import annotations
@@ -37,70 +39,151 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..models import MemoryEntry, now_iso
+from .claims import (
+    DEFAULT_MAX_PAIRS,
+    PER_ENTRY_PAIR,
+    Candidate,
+    Claim,
+    PairingStats,
+    candidates,
+    collect,
+)
 from .organize import _fingerprint, quote_is_located
 from .provider import AIError, Provider
 from .schema import extract_json
 
-#: Relations the model may report. ``unrelated`` is deliberately absent: it is
-#: the default assumption, and asking the model to confirm it wastes output on
-#: every non-conflict in the vault.
-RELATIONS = ("supersedes", "contradicts", "duplicate")
+#: Relations the model may report. ``none`` is a first-class answer: without an
+#: explicit way to say "these are unrelated", a prompt that hands over two
+#: fragments pressures the model into inventing a relationship between them.
+RELATIONS = ("supersede", "contradicts", "duplicate", "none")
 
-#: Same guard as ``organize.BATCH_CHARS`` and for the same reason: an oversized
-#: request fails with an opaque context-length error instead of a useful one.
-BATCH_CHARS = 24000
+#: Spelling variants seen in real answers. Dropping a correct judgement because
+#: the model wrote ``contradict`` instead of ``contradicts`` is a false negative
+#: caused by this module, not by the model -- and it happened on the exact pair
+#: this feature exists for.
+RELATION_ALIASES = {
+    "supersedes": "supersede",
+    "superseded": "supersede",
+    "replace": "supersede",
+    "contradict": "contradicts",
+    "conflict": "contradicts",
+    "duplicates": "duplicate",
+    "same": "duplicate",
+    "unrelated": "none",
+    "no_conflict": "none",
+}
 
-#: Above this, one run stops being one cheap call. The refusal is explicit
-#: rather than silent truncation -- dropping entries quietly would mean the
-#: command reports "no conflicts" for a corpus it never looked at.
-MAX_ENTRIES = 300
+#: Labels for the CLI, keyed by the relation names above. ``supersedes`` is the
+#: plural the version-1 proposals on disk still carry; the listing must render
+#: those too rather than printing a raw field value at the reader.
+RELATION_LABELS = {
+    "supersede": "取代",
+    "supersedes": "取代",
+    "contradicts": "矛盾",
+    "duplicate": "重复",
+    "none": "无关",
+}
 
-#: A response with more pairs than this is not a vault with 60 conflicts; it is
-#: a model that started paraphrasing instead of comparing.
-MAX_PAIRS = 50
+#: When one entry pair yields several claim verdicts, the strongest wins. Order
+#: matters: retiring a memory is a bigger claim than "these two say the same".
+SEVERITY = {"supersede": 3, "contradicts": 2, "duplicate": 1, "none": 0}
 
 MAX_REASON_CHARS = 400
 
-SYSTEM_PROMPT = """\
-你在比对一个人记忆库里已经批准的记忆条目，找出互相矛盾、或已被后者取代的条目。
+#: Three consecutive transport failures is not a flaky pair, it is a broken
+#: endpoint. Continuing would burn one doomed request per candidate.
+FAILURE_BUDGET = 3
 
-判定关系只有三种：
-- supersedes：两条讲同一件事，其中一条明确更新（时间更晚、结论更具体），旧的那条不再成立。winner 填仍然成立的那条 id。
-- contradicts：两条直接矛盾，但没有证据说明哪条更新或更权威，无法判断该信谁。winner 留空。
-- duplicate：同一件事被记了两遍，内容一致、不矛盾。winner 填内容更完整的那条。
+JUDGE_SYSTEM = """\
+你在核对同一个人的记忆库里，两段内容是否互相矛盾。
 
-以下情况**不要输出**：话题相近但互不矛盾；一条是另一条的补充细节；措辞不同但含义相同（那是 duplicate，不是 supersedes）；分类不同但各说各的。
+给你两段片段，标为 A 和 B，每段旁边附上它所属记忆的全文作为背景。
+**只判断 A 与 B 这两段本身**；背景只用来理解指代（"它"、"这个项目"指什么），
+不要拿 A 去和 B 所在记忆里的其他内容比较，也不要评价这两条记忆整体。
 
-证据规则（最重要）：
-- 每条判定必须给出 evidence，键是 id，值是从该条目正文里**逐字复制**的片段（6-40 字）。
-- 片段要能直接看出矛盾点。不许改写、不许拼接两条的内容、不许写概括。
-- 定位不到的判定会被降级为 contradicts 且丢弃 winner —— 也就是说，编造证据等于这条判定作废。
+四选一：
+- contradict：A 与 B 对同一件事给出不相容的说法，且从措辞看不出哪条更新。
+- supersede：A 与 B 说的是同一件事，其中一段明确取代另一段。
+- duplicate：A 与 B 说的是同一件事，措辞不同但不矛盾。
+- none：两段各说各的；或一段是另一段的补充细节；或只是话题相近。
+  **大部分对都应该是 none，选它不算失败。不要为了给出结论而硬凑关系。**
 
-输出：只输出一个 JSON 对象，不要 markdown 代码块，不要解释文字。
-{"pairs": [{"a": "条目id", "b": "条目id", "relation": "supersedes", "winner": "条目id", "reason": "一句话说明为什么", "evidence": {"条目id": "逐字片段", "条目id": "逐字片段"}}]}
+判断"是不是同一件事"时，这两条最容易判错：
+- **状态与结论是同一件事。** 一段说某事"尚未确定/待定/计划中/先做 X"，另一段给出了这件事的
+  具体结论或结果，那是同一件事的两种状态，属于 contradict 或 supersede。
+  不要把它解释成"描述层面不同""一个是流程一个是结论"而判 none —— 这正是最常见的漏报。
+  例：`毕业论文（尚未冻结）：先确定题目` 与 `毕业论文：《基于多 Agent 架构的…研究》`
+  讲的是同一件事，一个说题目没定，一个给出了题目，**它们矛盾**。
+- **不同方面才是不同的事。** 两段分别讲同一项目的不同侧面（一段说目标、一段说目录；
+  一段说研究方法和一段说参考文献格式），那是不同的事，判 none。
 
-没有发现任何冲突时输出 {"pairs": []}。"""
+判断新旧时最容易出错的一点：
+- 记忆里的日期是**录入时间**，不是这件事发生的时间。晚录入的可能是一段很早的旧回忆。
+  **绝对不要用日期判断谁更新。**
+- 只有片段本身的措辞能证明先后时才判 supersede：例如"已确定/已定/已放弃/已取消/改为/最终"
+  对比"尚未/待定/计划/打算/先确定"。
+- 判不了就说 contradict 并且 newer 留空。说出"两条冲突但不知道该信谁"比猜错方向有用得多。
 
-USER_TEMPLATE = """\
-以下是记忆库中全部已批准且未过期的条目（共 {count} 条）。找出其中互相矛盾或已被取代的对。
+引用规则（最重要）：
+- quote_a 必须是 A 中**逐字复制**的一段（6-40 字），不要改写、不要拼接。
+- quote_b 同理，必须来自 B。
+- 判 supersede 时，direction 填能看出先后关系的那几个字，且必须逐字来自你选定为较新的那一段。
+- 任何一条引用在原文里定位不到，这条判定就作废。编造引用等于这条判定没发生。
 
-{entries}"""
+只输出一个 JSON 对象，不要 markdown 代码块，不要任何解释性文字：
+{"relation": "none", "newer": "", "quote_a": "", "quote_b": "", "direction": "", "reason": ""}
+
+字段说明：newer 只取 "a" 或 "b"（仅 supersede 时填，其余留空）；
+reason 一句话说明为什么，判 none 时也可以留空。"""
+
+JUDGE_USER = """\
+条目 A（分类 {a_category}）：
+{a_body}
+
+其中要判断的片段 A：
+〈{a_claim}〉
+
+条目 B（分类 {b_category}）：
+{b_body}
+
+其中要判断的片段 B：
+〈{b_claim}〉"""
+
+
+@dataclass
+class ClaimVerdict:
+    """One model answer about one claim pair, validated against the text."""
+
+    left: Claim
+    right: Claim
+    relation: str
+    reason: str
+    #: claim.key -> verbatim quote from that claim.
+    quotes: Dict[str, str] = field(default_factory=dict)
+    #: Both quotes were located inside their claims. False means the answer
+    #: described something that is not there, so no verdict may be attached.
+    verified: bool = False
+    #: Entry id the model says is still current. None unless verified.
+    winner_entry: Optional[str] = None
 
 
 @dataclass
 class ConflictPair:
-    """One detected relation, with the evidence that has to hold it up."""
+    """A proposal about two *entries*, assembled from one or more claim verdicts."""
 
     a: str
     b: str
     relation: str
     reason: str
-    #: id -> quote copied from that entry's body.
     evidence: Dict[str, str] = field(default_factory=dict)
-    #: Both quotes were located in their entries. False means the model's
-    #: description could not be checked, so no verdict is attached.
     verified: bool = False
     winner: Optional[str] = None
+    #: ``whole`` when every claim on the affected side is involved, ``partial``
+    #: when only some are. A partial conflict must not be archived wholesale --
+    #: that is the summary-entry failure this module exists for.
+    scope: str = "whole"
+    #: Claim-level detail, so the reader sees which sentence contradicts which.
+    claims: List[Dict[str, object]] = field(default_factory=list)
 
     @property
     def key(self) -> Tuple[str, str]:
@@ -111,12 +194,14 @@ class ConflictPair:
         from the vault by id, and a stale copy would be a second truth."""
         first, second = self.key
         return {
-            "version": 1,
+            "version": 2,
             "pair": [first, second],
             "relation": self.relation,
+            "scope": self.scope,
             "winner": self.winner,
             "reason": self.reason,
             "evidence": {key: self.evidence[key] for key in (first, second) if key in self.evidence},
+            "claims": self.claims,
             "verified": self.verified,
             "detected_at": detected_at or now_iso(),
             "model": model,
@@ -127,6 +212,8 @@ class ConflictPair:
 class ConflictResult:
     pairs: List[ConflictPair] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
+    verdicts: List[ClaimVerdict] = field(default_factory=list)
+    stats: PairingStats = field(default_factory=PairingStats)
     calls: int = 0
     chars_sent: int = 0
 
@@ -134,218 +221,331 @@ class ConflictResult:
     def unverified(self) -> int:
         return sum(1 for pair in self.pairs if not pair.verified)
 
+    @property
+    def considered(self) -> int:
+        """Claim pairs the model actually looked at and said nothing about."""
+        return max(0, self.stats.selected - len(self.verdicts))
 
-def _render(entry: MemoryEntry) -> str:
-    return (
-        f"### {entry.id} | {entry.category} | {entry.created_at[:10]}\n"
-        f"{entry.body.strip()}\n"
+
+def _render_judge(candidate: Candidate, entries: Dict[str, MemoryEntry]) -> str:
+    left_entry = entries[candidate.left.entry_id]
+    right_entry = entries[candidate.right.entry_id]
+    return JUDGE_USER.format(
+        a_category=left_entry.category,
+        a_body=left_entry.body.strip(),
+        a_claim=candidate.left.text.strip(),
+        b_category=right_entry.category,
+        b_body=right_entry.body.strip(),
+        b_claim=candidate.right.text.strip(),
     )
 
 
-def pack(entries: Sequence[MemoryEntry], limit: int = BATCH_CHARS) -> List[List[MemoryEntry]]:
-    """Split the corpus into calls that stay under ``limit`` characters.
+def _match_quotes(
+    payload: object, candidate: Candidate
+) -> Tuple[Dict[str, str], bool]:
+    """Map the two quotes onto the two claims.
 
-    Entries are never split: half an entry is exactly the fragment the model
-    would then "complete" from imagination.
+    Returns ``(quotes_by_claim_key, swapped)``; an empty dict means at least one
+    quote could not be located in *either* claim.
+
+    A swapped pair is accepted because which side is "a" depends on the internal
+    ordering of the two entries, and getting that label backwards says nothing
+    about whether the quotes are real. What is *not* tolerated is a quote that
+    exists in neither claim: that is the failure this check exists for.
     """
-    batches: List[List[MemoryEntry]] = []
-    current: List[MemoryEntry] = []
-    size = 0
-    for entry in sorted(entries, key=lambda e: (e.created_at, e.id)):
-        block = len(_render(entry))
-        if current and size + block > limit:
-            batches.append(current)
-            current, size = [], 0
-        current.append(entry)
-        size += block
-    if current:
-        batches.append(current)
-    return batches
+    if not isinstance(payload, dict):
+        return {}, False
+    for swapped in (False, True):
+        fields = ("quote_b", "quote_a") if swapped else ("quote_a", "quote_b")
+        quotes: Dict[str, str] = {}
+        located = True
+        for claim, field_name in zip((candidate.left, candidate.right), fields):
+            raw = payload.get(field_name)
+            if not isinstance(raw, str) or not raw.strip():
+                located = False
+                break
+            quote = " ".join(raw.split())
+            quotes[claim.key] = quote
+            if not quote_is_located(quote, _fingerprint(claim.text)):
+                located = False
+                break
+        if located:
+            return quotes, swapped
+    return {}, False
+
+
+def parse_verdict(
+    payload: object, candidate: Candidate
+) -> Tuple[Optional[ClaimVerdict], List[str]]:
+    """Validate one answer against the two claims it was given.
+
+    The quote test is the only automatic defence against a fluid answer, and it
+    is applied at claim granularity on purpose: a quote that only exists
+    *elsewhere in the entry* means the model compared something other than the
+    two fragments it was asked about, which is precisely the failure mode of the
+    previous version.
+    """
+    problems: List[str] = []
+    if not isinstance(payload, dict):
+        raise ValueError(f"顶层应为对象，实际是 {type(payload).__name__}")
+
+    relation = str(payload.get("relation") or "").strip().lower()
+    relation = RELATION_ALIASES.get(relation, relation)
+    if relation not in RELATIONS:
+        raise ValueError(f"relation {relation!r} 不在 {RELATIONS}")
+
+    reason = payload.get("reason")
+    reason = " ".join(reason.split()) if isinstance(reason, str) else ""
+    if len(reason) > MAX_REASON_CHARS:
+        problems.append(f"reason 过长（{len(reason)} 字），已截断")
+        reason = reason[:MAX_REASON_CHARS]
+
+    if relation == "none":
+        # "These two are unrelated" asserts an absence. Nothing downstream acts
+        # on it, so demanding evidence would only train the model to invent a
+        # relationship in order to have something to quote.
+        return (
+            ClaimVerdict(
+                left=candidate.left,
+                right=candidate.right,
+                relation="none",
+                reason=reason,
+            ),
+            problems,
+        )
+
+    quotes, swapped = _match_quotes(payload, candidate)
+    if swapped:
+        problems.append("quote_a/quote_b 的 A/B 标反了，已按内容自动对调")
+    if not quotes:
+        problems.append(
+            "引用在对应片段里定位不到 —— 这条判定降级为「矛盾」，不标方向"
+        )
+        return (
+            ClaimVerdict(
+                left=candidate.left,
+                right=candidate.right,
+                relation="contradicts",
+                reason=reason,
+            ),
+            problems,
+        )
+
+    winner: Optional[str] = None
+    if relation == "supersede":
+        newer = str(payload.get("newer") or "").strip().lower()
+        if swapped:
+            # The quotes revealed that the answer labelled the sides the other way
+            # round, so "newer: b" means the claim this module calls ``left``.
+            # Flipping only the quotes would leave the direction pointing at the
+            # wrong entry -- the exact error (a wrong winner) that made the first
+            # version dangerous.
+            newer = {"a": "b", "b": "a"}.get(newer, newer)
+        direction = payload.get("direction")
+        direction = " ".join(direction.split()) if isinstance(direction, str) else ""
+        if newer not in ("a", "b") or not direction:
+            problems.append(
+                "判了取代但没说清哪条更新（newer/direction 缺失）—— 降级为「矛盾」"
+            )
+            relation = "contradicts"
+        else:
+            side = candidate.left if newer == "a" else candidate.right
+            if not quote_is_located(direction, _fingerprint(side.text)):
+                problems.append(
+                    "direction 引用不在被判为较新的那段里 —— 降级为「矛盾」"
+                )
+                relation = "contradicts"
+            else:
+                winner = side.entry_id
+
+    return (
+        ClaimVerdict(
+            left=candidate.left,
+            right=candidate.right,
+            relation=relation,
+            reason=reason,
+            quotes=quotes,
+            verified=True,
+            winner_entry=winner,
+        ),
+        problems,
+    )
+
+
+def judge(
+    candidate: Candidate,
+    entries: Dict[str, MemoryEntry],
+    provider: Provider,
+) -> Tuple[Optional[ClaimVerdict], List[str]]:
+    """One pair, one call. No other claim is in the request."""
+    messages = [
+        {"role": "system", "content": JUDGE_SYSTEM},
+        {"role": "user", "content": _render_judge(candidate, entries)},
+    ]
+    raw = provider.chat(messages)
+    payload = extract_json(raw)
+    return parse_verdict(payload, candidate)
+
+
+def aggregate(
+    verdicts: Sequence[ClaimVerdict],
+    claim_counts: Dict[str, int],
+) -> List[ConflictPair]:
+    """Fold claim verdicts into one proposal per entry pair.
+
+    ``scope`` is the field that keeps the summary-entry failure from recurring:
+    when only some claims on a side conflict, the proposal is explicitly partial,
+    and the CLI says so next to the ``supersede`` command it prints.
+    """
+    grouped: Dict[Tuple[str, str], List[ClaimVerdict]] = {}
+    for verdict in verdicts:
+        if verdict.relation == "none":
+            continue
+        group = tuple(sorted((verdict.left.entry_id, verdict.right.entry_id)))
+        grouped.setdefault(group, []).append(verdict)
+
+    pairs: List[ConflictPair] = []
+    for (a, b), items in grouped.items():
+        items.sort(
+            key=lambda item: (-SEVERITY[item.relation], item.left.key, item.right.key)
+        )
+        strongest = items[0]
+        relation = strongest.relation if strongest.verified else "contradicts"
+        winner = strongest.winner_entry if strongest.verified else None
+        if winner is not None and relation not in ("supersede", "duplicate"):
+            winner = None
+
+        evidence: Dict[str, str] = {}
+        for verdict in items:
+            for claim_key, quote in verdict.quotes.items():
+                entry_id = claim_key.split("#", 1)[0]
+                if entry_id in (a, b) and entry_id not in evidence:
+                    evidence[entry_id] = quote
+
+        involved: Dict[str, set] = {a: set(), b: set()}
+        for verdict in items:
+            involved[verdict.left.entry_id].add(verdict.left.index)
+            involved[verdict.right.entry_id].add(verdict.right.index)
+        partial = any(
+            len(involved[entry_id]) < claim_counts.get(entry_id, 0)
+            for entry_id in (a, b)
+        )
+
+        pairs.append(
+            ConflictPair(
+                a=a,
+                b=b,
+                relation=relation,
+                reason=strongest.reason
+                or (items[1].reason if len(items) > 1 else ""),
+                evidence=evidence,
+                verified=all(item.verified for item in items),
+                winner=winner,
+                scope="partial" if partial else "whole",
+                claims=[
+                    {
+                        "left": item.left.key,
+                        "right": item.right.key,
+                        "relation": item.relation,
+                        "verified": item.verified,
+                        "quote_left": item.quotes.get(item.left.key, ""),
+                        "quote_right": item.quotes.get(item.right.key, ""),
+                        "reason": item.reason,
+                    }
+                    for item in items
+                ],
+            )
+        )
+
+    pairs.sort(key=lambda pair: (-SEVERITY[pair.relation], pair.a, pair.b))
+    return pairs
 
 
 def detect(
     entries: Sequence[MemoryEntry],
     provider: Provider,
     *,
-    max_entries: int = MAX_ENTRIES,
+    max_pairs: int = DEFAULT_MAX_PAIRS,
+    per_entry_pair: int = PER_ENTRY_PAIR,
+    on_progress=None,
+    on_planned=None,
 ) -> ConflictResult:
-    """Ask the model which approved entries disagree with which."""
+    """Pair claims, then ask the model about each pair separately.
+
+    ``on_planned(stats, count)`` runs after pairing and before the first call --
+    the CLI uses it to print what the run costs and to ask for confirmation, so a
+    person can decline *before* the money is spent and before any text leaves the
+    machine. Returning ``False`` cancels.
+
+    ``on_progress(done, total, verdict)`` is called after every pair; the CLI
+    uses it to keep a long run visible instead of a silent minute.
+    """
     result = ConflictResult()
     if len(entries) < 2:
         return result
-    if len(entries) > max_entries:
-        raise ValueError(
-            f"已批准条目 {len(entries)} 条，超过单次比对上限 {max_entries} 条。"
-            "用 --category 收窄，或先归档过期内容。"
-            "（静默截断会让命令报告「没有冲突」，而它根本没看全。）"
-        )
 
-    bodies = {entry.id: _fingerprint(entry.body) for entry in entries}
+    claims = collect(entries)
+    chosen, stats = candidates(claims, limit=max_pairs, per_entry_pair=per_entry_pair)
+    result.stats = stats
+    if not chosen:
+        return result
 
-    for index, batch in enumerate(pack(entries), start=1):
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": USER_TEMPLATE.format(
-                    count=len(batch),
-                    entries="\n".join(_render(entry) for entry in batch),
-                ),
-            },
-        ]
-        raw = provider.chat(messages)
-        result.calls += 1
-        result.chars_sent += sum(len(_render(entry)) for entry in batch)
+    if on_planned is not None and on_planned(stats, len(chosen)) is False:
+        result.problems.append("已取消：配对已完成，但没有发送任何内容")
+        return result
 
+    by_id = {entry.id: entry for entry in entries}
+    claim_counts: Dict[str, int] = {}
+    for claim in claims:
+        claim_counts[claim.entry_id] = claim_counts.get(claim.entry_id, 0) + 1
+
+    failures = 0
+    for index, candidate in enumerate(chosen, start=1):
         try:
-            payload = extract_json(raw)
-        except ValueError as exc:
-            result.problems.append(f"第 {index} 批：{exc}")
-            continue
-        try:
-            pairs, problems = parse_conflicts(payload, bodies)
-        except ValueError as exc:
-            result.problems.append(f"第 {index} 批：{exc}")
-            continue
-        result.problems.extend(f"第 {index} 批 {problem}" for problem in problems)
-
-        seen = {pair.key for pair in result.pairs}
-        for pair in pairs:
-            if pair.key in seen:
+            verdict, problems = judge(candidate, by_id, provider)
+        except AIError as exc:
+            failures += 1
+            result.problems.append(
+                f"{candidate.left.key} / {candidate.right.key}: {exc}"
+            )
+            if failures >= FAILURE_BUDGET:
                 result.problems.append(
-                    f"{pair.a} / {pair.b}: 同一对出现了两次，保留第一次判定"
-                )
-                continue
-            seen.add(pair.key)
-            if len(result.pairs) >= MAX_PAIRS:
-                result.problems.append(
-                    f"达到单次上限 {MAX_PAIRS} 对，其余已丢弃（库该人工梳理了）"
+                    f"连续 {failures} 次调用失败，已中止 —— 先修好端点再重跑，"
+                    f"剩余 {len(chosen) - index} 段对没有送审"
                 )
                 break
-            result.pairs.append(pair)
+            continue
+        except ValueError as exc:
+            result.problems.append(
+                f"{candidate.left.key} / {candidate.right.key}: {exc}"
+            )
+            continue
 
+        failures = 0
+        result.calls += 1
+        result.chars_sent += len(_render_judge(candidate, by_id))
+        result.problems.extend(
+            f"{candidate.left.key} / {candidate.right.key}: {problem}"
+            for problem in problems
+        )
+        if verdict is not None:
+            result.verdicts.append(verdict)
+        if on_progress is not None:
+            on_progress(index, len(chosen), verdict)
+
+    result.pairs = aggregate(result.verdicts, claim_counts)
     return result
 
 
-def parse_conflicts(
-    payload: object, bodies: Dict[str, str]
-) -> Tuple[List[ConflictPair], List[str]]:
-    """Validate the model's answer against the entries it was given.
-
-    ``bodies`` maps id -> normalised body text, and doubles as the membership
-    test: an id the model invented is not in it. Per-item failures are dropped
-    with a reason so one bad pair does not discard a good one.
-    """
-    problems: List[str] = []
-    if not isinstance(payload, dict):
-        raise ValueError(f"顶层应为对象，实际是 {type(payload).__name__}")
-    raw_items = payload.get("pairs")
-    if not isinstance(raw_items, list):
-        raise ValueError("缺少 pairs 数组")
-
-    accepted: List[ConflictPair] = []
-    for index, raw in enumerate(raw_items):
-        where = f"pairs[{index}]"
-        if not isinstance(raw, dict):
-            problems.append(f"{where}: 不是对象")
-            continue
-
-        a = str(raw.get("a") or "").strip()
-        b = str(raw.get("b") or "").strip()
-        if a not in bodies or b not in bodies:
-            problems.append(f"{where}: id 不在本次送出的条目里（{a!r} / {b!r}）")
-            continue
-        if a == b:
-            problems.append(f"{where}: a 与 b 是同一条")
-            continue
-
-        relation = str(raw.get("relation") or "").strip().lower()
-        if relation not in RELATIONS:
-            problems.append(f"{where}: 关系 {relation!r} 不在 {RELATIONS}")
-            continue
-
-        reason = raw.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            problems.append(f"{where}: 缺少 reason")
-            continue
-        reason = " ".join(reason.split())
-        if len(reason) > MAX_REASON_CHARS:
-            problems.append(f"{where}: reason 过长（{len(reason)} 字），已截断")
-            reason = reason[:MAX_REASON_CHARS]
-
-        winner = raw.get("winner")
-        winner = str(winner).strip() if isinstance(winner, str) else ""
-        if relation in ("supersedes", "duplicate"):
-            if winner not in (a, b):
-                problems.append(
-                    f"{where}: {relation} 的 winner 必须是 a 或 b 之一，"
-                    f"实际 {winner!r} —— 已降级为 contradicts"
-                )
-                relation, winner = "contradicts", ""
-        else:
-            winner = ""  # contradicts never names a winner
-
-        evidence, verified = _check_evidence(raw.get("evidence"), a, b, bodies)
-        if not verified:
-            problems.append(
-                f"{where}: evidence 在原文里定位不到（{a} / {b}）—— 已降级为 contradicts"
-            )
-            relation, winner = "contradicts", ""
-
-        accepted.append(
-            ConflictPair(
-                a=a,
-                b=b,
-                relation=relation,
-                reason=reason,
-                evidence=evidence,
-                verified=verified,
-                winner=winner or None,
-            )
-        )
-
-    return accepted, problems
-
-
-def _check_evidence(
-    raw: object, a: str, b: str, bodies: Dict[str, str]
-) -> Tuple[Dict[str, str], bool]:
-    """Return ``(cleaned_evidence, both_quotes_located)``.
-
-    Keys are normalised to the two ids, so an answer whose ``evidence`` uses
-    "a"/"b" instead of ids is not silently trusted -- it simply fails to
-    locate, which is the correct outcome for a response that ignored the
-    contract.
-    """
-    if not isinstance(raw, dict):
-        return {}, False
-
-    cleaned: Dict[str, str] = {}
-    located = True
-    for entry_id in (a, b):
-        quote = raw.get(entry_id)
-        if not isinstance(quote, str) or not quote.strip():
-            located = False
-            continue
-        quote = " ".join(quote.split())
-        cleaned[entry_id] = quote
-        if not quote_is_located(quote, bodies[entry_id]):
-            located = False
-    return cleaned, located
-
-
 def findings_line(pair: ConflictPair) -> str:
-    """One line for the listing: who, what, and whether it can be trusted."""
+    """One line for the listing: what, how deep, and whether it can be trusted."""
     mark = "" if pair.verified else "  [证据未核实]"
+    scope = "  仅部分片段" if pair.scope == "partial" else ""
     arrow = f" → {pair.winner}" if pair.winner else ""
-    return f"{RELATION_LABELS[pair.relation]:<10}{pair.a}  {pair.b}{arrow}{mark}"
-
-
-RELATION_LABELS = {
-    "supersedes": "取代",
-    "contradicts": "矛盾",
-    "duplicate": "重复",
-}
+    return (
+        f"{RELATION_LABELS.get(pair.relation, pair.relation):<6}"
+        f"{pair.a}  {pair.b}{arrow}{scope}{mark}"
+    )
 
 
 def looks_mixed(entry: MemoryEntry) -> bool:

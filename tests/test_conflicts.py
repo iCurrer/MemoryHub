@@ -1,15 +1,16 @@
-"""Conflict detection and the supersede chain (P3-05).
+"""Claim-level judgement, the proposal on disk, and the one write (P3-05).
 
 What is asserted here is not that the model finds the right conflicts -- that
-cannot be asserted without a real model. It is that everything around the model
-holds: the corpus is packed without losing an entry, an invented id or an
-unlocatable quote cannot produce a verdict, a proposal never becomes a write,
-and the one write that does change the vault refuses every case where the naive
-version loses data.
+cannot be asserted without one. It is that everything around the model holds:
+each call carries exactly one claim pair, an invented quote cannot produce a
+verdict, a direction claim needs evidence from the claim it points at, a partial
+conflict is labelled instead of silently becoming a whole-entry archive, and the
+one write in the workflow refuses every case where the naive version loses data.
 
-The real case that motivated this feature is reproduced in
-``SupersedeTests.test_the_paper_title_case`` -- a 400-character entry saying the
-title is not settled next to a 36-character entry that settles it.
+The real case that motivated the rewrite is reproduced in
+``JudgeNarrowingTests.test_no_unrelated_entry_reaches_the_prompt`` -- eight
+entries of context were enough to erase the paper-title conflict on the real
+vault, so the guard is structural, not prompt-level.
 """
 
 from __future__ import annotations
@@ -29,46 +30,29 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from memoryhub import conflicts  # noqa: E402
-from memoryhub.ai import AIConfig, Provider, detect, parse_conflicts, pack  # noqa: E402
-from memoryhub.ai.conflict import (  # noqa: E402
-    MAX_ENTRIES,
+from memoryhub.ai import (  # noqa: E402
+    AIConfig,
+    Claim,
+    ClaimVerdict,
     ConflictPair,
-    looks_mixed,
+    Provider,
+    aggregate,
+    detect,
+    judge,
+    parse_verdict,
 )
-from memoryhub.ai.organize import _fingerprint  # noqa: E402
+from memoryhub.ai.claims import Candidate, collect  # noqa: E402
+from memoryhub.ai.conflict import looks_mixed  # noqa: E402
 from memoryhub.cli import main  # noqa: E402
 from memoryhub.models import MemoryEntry, ValidationError  # noqa: E402
 from memoryhub.storage.markdown_store import VaultStore  # noqa: E402
 
-
 OLD_TITLE = "### 个人工作台「我的大四」\n- 毕业论文（尚未冻结）：先确定题目 → 确定企业和研究资料 → 建立研究结构"
 NEW_TITLE = "毕业论文：《基于多 Agent 架构的企业财务共享中心工作流程优化研究》"
 
-
-def _reply(pairs):
-    body = {"pairs": pairs}
-    return {
-        "choices": [
-            {"message": {"content": json.dumps(body, ensure_ascii=False)}}
-        ]
-    }
-
-
-class FakeTransport:
-    def __init__(self, payload):
-        self.payload = payload
-        self.calls = []
-
-    def __call__(self, url, payload, headers, timeout):
-        self.calls.append(payload)
-        return self.payload
-
-
-def _provider(payload):
-    return Provider(
-        AIConfig(base_url="https://example.test/v1", model="fake"),
-        transport=FakeTransport(payload),
-    )
+ID_A = "mem_20261125T155817_782bcbcf"
+ID_B = "mem_20261124T205154_e6e751a1"
+ID_C = "mem_20261124T205154_cccccccc"
 
 
 def _entry(entry_id: str, body: str, *, category: str = "project", **kwargs) -> MemoryEntry:
@@ -85,198 +69,356 @@ def _entry(entry_id: str, body: str, *, category: str = "project", **kwargs) -> 
     )
 
 
-def _bodies(*entries: MemoryEntry) -> dict:
-    return {entry.id: _fingerprint(entry.body) for entry in entries}
+def _claim(entry_id: str, index: int, text: str) -> Claim:
+    return Claim(entry_id=entry_id, index=index, text=text)
 
 
-ID_A = "mem_20261124T100000_aaaaaaaa"
-ID_B = "mem_20261125T100000_bbbbbbbb"
+def _body(reply: object) -> dict:
+    """An OpenAI-shaped response carrying ``reply`` as the answer."""
+    return {"choices": [{"message": {"content": json.dumps(reply, ensure_ascii=False)}}]}
 
 
-# --------------------------------------------------------------------- pack
+class ScriptedTransport:
+    """Returns queued answers in order and records every request."""
+
+    def __init__(self, *replies: object) -> None:
+        self.replies = list(replies)
+        self.calls = []
+
+    def __call__(self, url, payload, headers, timeout):
+        self.calls.append(payload)
+        reply = self.replies.pop(0) if self.replies else {"relation": "none"}
+        return _body(reply)
 
 
-class PackTests(unittest.TestCase):
-    def test_small_corpus_is_one_batch(self) -> None:
-        entries = [_entry(ID_A, "a" * 100), _entry(ID_B, "b" * 100)]
-        self.assertEqual(len(pack(entries, limit=1000)), 1)
-
-    def test_no_entry_is_dropped_when_splitting(self) -> None:
-        entries = [_entry(f"mem_2026112{i}T100000_abcdef0{i}", "字" * 300) for i in range(1, 6)]
-        batches = pack(entries, limit=400)
-        self.assertGreater(len(batches), 1)
-        seen = [entry.id for batch in batches for entry in batch]
-        self.assertEqual(sorted(seen), sorted(entry.id for entry in entries))
-
-    def test_an_oversized_entry_still_gets_its_own_batch(self) -> None:
-        # Splitting an entry in half would hand the model a fragment it would
-        # then "complete" from imagination -- the failure organize.py exists for.
-        entries = [_entry(ID_A, "字" * 5000), _entry(ID_B, "短")]
-        batches = pack(entries, limit=100)
-        self.assertIn([ID_A], [[e.id for e in batch] for batch in batches])
+def _provider(*replies: object) -> Provider:
+    return Provider(
+        AIConfig(base_url="https://example.test/v1", model="fake"),
+        transport=ScriptedTransport(*replies),
+    )
 
 
-# ------------------------------------------------------------ the judgement
+SUPERSEDE_ANSWER = {
+    "relation": "supersede",
+    "newer": "b",
+    "quote_a": "毕业论文（尚未冻结）：先确定题目",
+    "quote_b": "《基于多 Agent 架构的企业财务共享中心工作流程优化研究》",
+    "direction": "基于多 Agent 架构",
+    "reason": "前者称题目尚未冻结，后者已给出确定题目",
+}
 
 
-class ParseTests(unittest.TestCase):
+# ------------------------------------------------------------------ parsing
+
+
+class ParseVerdictTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.bodies = _bodies(_entry(ID_A, OLD_TITLE), _entry(ID_B, NEW_TITLE))
-
-    def parse(self, pairs):
-        return parse_conflicts({"pairs": pairs}, self.bodies)
-
-    def test_a_supersede_with_locatable_evidence_survives(self) -> None:
-        pairs, problems = self.parse(
-            [
-                {
-                    "a": ID_A,
-                    "b": ID_B,
-                    "relation": "supersedes",
-                    "winner": ID_B,
-                    "reason": "前者称题目未定，后者已给出确定题目",
-                    "evidence": {
-                        ID_A: "毕业论文（尚未冻结）：先确定题目",
-                        ID_B: "《基于多 Agent 架构的企业财务共享中心工作流程优化研究》",
-                    },
-                }
-            ]
+        self.candidate = Candidate(
+            left=_claim(ID_A, 1, "毕业论文（尚未冻结）：先确定题目"),
+            right=_claim(ID_B, 0, NEW_TITLE),
+            score=0.9,
         )
+
+    def parse(self, payload: object):
+        return parse_verdict(payload, self.candidate)
+
+    def test_a_supported_supersede_becomes_a_direction(self) -> None:
+        verdict, problems = self.parse(SUPERSEDE_ANSWER)
+        assert verdict is not None
         self.assertEqual(problems, [])
-        self.assertEqual(len(pairs), 1)
-        self.assertTrue(pairs[0].verified)
-        self.assertEqual(pairs[0].winner, ID_B)
+        self.assertTrue(verdict.verified)
+        self.assertEqual(verdict.relation, "supersede")
+        self.assertEqual(verdict.winner_entry, ID_B)
 
-    def test_an_invented_id_is_dropped(self) -> None:
-        pairs, problems = self.parse(
-            [
-                {
-                    "a": ID_A,
-                    "b": "mem_20260101T000000_deadbeef",
-                    "relation": "contradicts",
-                    "reason": "x",
-                    "evidence": {ID_A: "毕业论文", "mem_20260101T000000_deadbeef": "y"},
-                }
-            ]
-        )
-        self.assertEqual(pairs, [])
-        self.assertIn("不在本次送出", problems[0])
+    def test_none_is_a_normal_answer(self) -> None:
+        verdict, problems = self.parse({"relation": "none", "reason": "各说各的"})
+        assert verdict is not None
+        self.assertEqual(problems, [])
+        self.assertEqual(verdict.relation, "none")
+        self.assertIsNone(verdict.winner_entry)
 
-    def test_self_comparison_is_dropped(self) -> None:
-        pairs, _ = self.parse(
-            [{"a": ID_A, "b": ID_A, "relation": "contradicts", "reason": "x", "evidence": {}}]
-        )
-        self.assertEqual(pairs, [])
+    def test_the_plural_relation_from_version_one_records_is_accepted(self) -> None:
+        # Old proposals on disk say "supersedes"; a hand-written answer using it
+        # must not be rejected for a spelling the project used to require.
+        verdict, _ = self.parse(dict(SUPERSEDE_ANSWER, relation="supersedes"))
+        assert verdict is not None
+        self.assertEqual(verdict.relation, "supersede")
 
-    def test_unknown_relation_is_dropped(self) -> None:
-        pairs, problems = self.parse(
-            [{"a": ID_A, "b": ID_B, "relation": "related", "reason": "x", "evidence": {}}]
+    def test_the_singular_contradict_is_accepted(self) -> None:
+        # Measured: on the paper-title pair the model answered "contradict" and
+        # the module discarded a correct judgement over one letter. A validator
+        # that manufactures false negatives is worse than a lenient one.
+        verdict, problems = self.parse(
+            {
+                "relation": "contradict",
+                "quote_a": "毕业论文（尚未冻结）：先确定题目",
+                "quote_b": "《基于多 Agent 架构",
+                "reason": "一个说题目没定，一个给出了题目",
+            }
         )
-        self.assertEqual(pairs, [])
-        self.assertIn("关系", problems[0])
+        assert verdict is not None
+        self.assertEqual(problems, [])
+        self.assertEqual(verdict.relation, "contradicts")
+        self.assertTrue(verdict.verified)
 
-    def test_supersedes_without_a_winner_becomes_contradicts(self) -> None:
-        # A claim about which one still holds cannot be made without naming it.
-        pairs, problems = self.parse(
-            [
-                {
-                    "a": ID_A,
-                    "b": ID_B,
-                    "relation": "supersedes",
-                    "reason": "x",
-                    "evidence": {ID_A: "毕业论文（尚未冻结）", ID_B: "《基于多 Agent 架构"},
-                }
-            ]
+    def test_a_quote_from_outside_the_claim_does_not_count(self) -> None:
+        # The whole point of claim granularity: a quote that only exists
+        # elsewhere in the entry means the model compared something other than
+        # the two fragments it was asked about.
+        verdict, problems = self.parse(
+            dict(SUPERSEDE_ANSWER, quote_a="个人工作台「我的大四」")
         )
-        self.assertEqual(pairs[0].relation, "contradicts")
-        self.assertIsNone(pairs[0].winner)
-        self.assertIn("winner", problems[0])
-
-    def test_fabricated_evidence_removes_the_verdict_but_keeps_the_pair(self) -> None:
-        # The pair may still be worth a human look; the *verdict* must not be.
-        pairs, problems = self.parse(
-            [
-                {
-                    "a": ID_A,
-                    "b": ID_B,
-                    "relation": "supersedes",
-                    "winner": ID_B,
-                    "reason": "x",
-                    "evidence": {ID_A: "原文里没有这句话", ID_B: "也没有这句"},
-                }
-            ]
-        )
-        self.assertEqual(len(pairs), 1)
-        self.assertFalse(pairs[0].verified)
-        self.assertEqual(pairs[0].relation, "contradicts")
-        self.assertIsNone(pairs[0].winner)
+        assert verdict is not None
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.relation, "contradicts")
+        self.assertIsNone(verdict.winner_entry)
         self.assertIn("定位不到", problems[0])
 
-    def test_evidence_keyed_by_a_and_b_is_not_trusted(self) -> None:
-        pairs, _ = self.parse(
-            [
-                {
-                    "a": ID_A,
-                    "b": ID_B,
-                    "relation": "contradicts",
-                    "reason": "x",
-                    "evidence": {"a": "毕业论文（尚未冻结）", "b": "《基于多 Agent 架构"},
-                }
-            ]
+    def test_an_invented_quote_downgrades_instead_of_vanishing(self) -> None:
+        # The pair is still worth a human look; the verdict is not.
+        verdict, _ = self.parse(
+            {"relation": "contradicts", "quote_a": "原文里没有这句", "quote_b": "也没有这句"}
         )
-        self.assertFalse(pairs[0].verified)
+        assert verdict is not None
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.relation, "contradicts")
 
-    def test_missing_reason_is_dropped(self) -> None:
-        pairs, problems = self.parse(
-            [{"a": ID_A, "b": ID_B, "relation": "contradicts", "evidence": {}}]
+    def test_a_supersede_without_a_direction_evidence_becomes_contradicts(self) -> None:
+        # Direction is the field that used to be guessed from ``created_at``.
+        # Without wording that proves precedence, guessing is exactly the error.
+        verdict, problems = self.parse(
+            {k: v for k, v in SUPERSEDE_ANSWER.items() if k != "direction"}
         )
-        self.assertEqual(pairs, [])
-        self.assertIn("reason", problems[0])
+        assert verdict is not None
+        self.assertEqual(verdict.relation, "contradicts")
+        self.assertIsNone(verdict.winner_entry)
+        self.assertIn("没说清哪条更新", problems[0])
 
-
-class DetectTests(unittest.TestCase):
-    def test_one_call_for_a_small_corpus_and_the_prompt_carries_both_bodies(self) -> None:
-        entries = [
-            _entry(ID_A, OLD_TITLE, created_at="2026-11-24T10:00:00+08:00"),
-            _entry(ID_B, NEW_TITLE, created_at="2026-11-25T10:00:00+08:00"),
-        ]
-        transport = FakeTransport(
-            _reply(
-                [
-                    {
-                        "a": ID_A,
-                        "b": ID_B,
-                        "relation": "supersedes",
-                        "winner": ID_B,
-                        "reason": "题目已定",
-                        "evidence": {ID_A: "毕业论文（尚未冻结）", ID_B: "《基于多 Agent 架构"},
-                    }
-                ]
-            )
+    def test_direction_evidence_must_come_from_the_newer_side(self) -> None:
+        verdict, problems = self.parse(
+            dict(SUPERSEDE_ANSWER, direction="毕业论文（尚未冻结）")
         )
+        assert verdict is not None
+        self.assertEqual(verdict.relation, "contradicts")
+        self.assertIn("不在被判为较新的那段", problems[0])
+
+    def test_newer_outside_a_and_b_is_refused(self) -> None:
+        verdict, _ = self.parse(dict(SUPERSEDE_ANSWER, newer="c"))
+        assert verdict is not None
+        self.assertEqual(verdict.relation, "contradicts")
+
+    def test_an_unknown_relation_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.parse({"relation": "related"})
+
+    def test_a_non_object_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.parse(["not", "an", "object"])
+
+
+# ---------------------------------------------------------------- narrowing
+
+
+class JudgeNarrowingTests(unittest.TestCase):
+    """The structural guard against the failure measured on the real vault."""
+
+    def test_no_unrelated_entry_reaches_the_prompt(self) -> None:
+        entries = {
+            ID_A: _entry(ID_A, OLD_TITLE),
+            ID_B: _entry(ID_B, NEW_TITLE),
+            ID_C: _entry(ID_C, "周末去拍了外滩的日落，用了 35mm 定焦镜头"),
+        }
+        candidate = Candidate(
+            left=_claim(ID_A, 1, "毕业论文（尚未冻结）：先确定题目"),
+            right=_claim(ID_B, 0, NEW_TITLE),
+            score=0.9,
+        )
+        transport = ScriptedTransport({"relation": "none"})
         provider = Provider(
             AIConfig(base_url="https://example.test/v1", model="fake"), transport=transport
         )
         with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
-            result = detect(entries, provider)
-        self.assertEqual(result.calls, 1)
-        self.assertGreater(result.chars_sent, 0)
-        self.assertEqual(len(result.pairs), 1)
+            judge(candidate, entries, provider)
 
-        sent = transport.calls[0]["messages"]
-        self.assertIn(ID_A, sent[1]["content"])
-        self.assertIn(ID_B, sent[1]["content"])
-        self.assertIn("evidence", sent[0]["content"])
+        self.assertEqual(len(transport.calls), 1)
+        prompt = transport.calls[0]["messages"][1]["content"]
+        self.assertIn("毕业论文（尚未冻结）", prompt)
+        self.assertIn("基于多 Agent 架构", prompt)
+        self.assertNotIn("外滩", prompt)
+        self.assertNotIn(ID_C, prompt)
+
+    def test_the_recording_date_is_not_sent(self) -> None:
+        # ``created_at`` is when the memory was written down, not when the fact
+        # happened. Sending it is what made the model call a late-recorded old
+        # note "newer". The prompt must not contain it at all.
+        entries = {
+            ID_A: _entry(ID_A, OLD_TITLE, created_at="2026-11-25T15:58:17+08:00"),
+            ID_B: _entry(ID_B, NEW_TITLE, created_at="2026-11-24T20:51:54+08:00"),
+        }
+        candidate = Candidate(
+            left=_claim(ID_A, 1, "毕业论文（尚未冻结）：先确定题目"),
+            right=_claim(ID_B, 0, NEW_TITLE),
+            score=0.9,
+        )
+        transport = ScriptedTransport({"relation": "none"})
+        provider = Provider(
+            AIConfig(base_url="https://example.test/v1", model="fake"), transport=transport
+        )
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            judge(candidate, entries, provider)
+        prompt = transport.calls[0]["messages"][1]["content"]
+        self.assertNotIn("2026-11-25", prompt)
+        self.assertNotIn("2026-11-24", prompt)
+
+    def test_the_system_prompt_forbids_inferring_newer_from_dates(self) -> None:
+        # Belt and braces: even if a date leaks in from a body, the rule is
+        # stated. A test on prose is weak, but this rule was violated twice.
+        from memoryhub.ai.conflict import JUDGE_SYSTEM
+
+        self.assertIn("录入时间", JUDGE_SYSTEM)
+        self.assertIn("不要用日期判断谁更新", JUDGE_SYSTEM)
+        self.assertIn("none", JUDGE_SYSTEM)
+
+
+# ---------------------------------------------------------------- aggregate
+
+
+class AggregateTests(unittest.TestCase):
+    def verdict(self, relation: str, *, left=1, right=0, verified=True, winner=None):
+        return ClaimVerdict(
+            left=_claim(ID_A, left, "毕业论文（尚未冻结）：先确定题目"),
+            right=_claim(ID_B, right, NEW_TITLE),
+            relation=relation,
+            reason="题目已定",
+            quotes={
+                f"{ID_A}#{left}": "毕业论文（尚未冻结）",
+                f"{ID_B}#{right}": "《基于多 Agent 架构",
+            },
+            verified=verified,
+            winner_entry=winner,
+        )
+
+    def test_none_verdicts_produce_no_proposal(self) -> None:
+        self.assertEqual(aggregate([self.verdict("none")], {ID_A: 1, ID_B: 1}), [])
+
+    def test_the_strongest_verdict_wins(self) -> None:
+        pairs = aggregate(
+            [self.verdict("duplicate"), self.verdict("supersede", winner=ID_B)],
+            {ID_A: 2, ID_B: 3},
+        )
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0].relation, "supersede")
+        self.assertEqual(pairs[0].winner, ID_B)
+
+    def test_a_partial_conflict_is_labelled_partial(self) -> None:
+        # The summary-entry failure: if only one of five claims is stale, the
+        # proposal must say so, because archiving the entry would hide the other
+        # four from every query.
+        pairs = aggregate([self.verdict("supersede", winner=ID_B)], {ID_A: 5, ID_B: 1})
+        self.assertEqual(pairs[0].scope, "partial")
+
+    def test_a_whole_conflict_is_not_labelled_partial(self) -> None:
+        pairs = aggregate([self.verdict("contradicts")], {ID_A: 1, ID_B: 1})
+        self.assertEqual(pairs[0].scope, "whole")
+
+    def test_an_unverified_verdict_loses_its_direction(self) -> None:
+        pairs = aggregate(
+            [self.verdict("supersede", verified=False, winner=ID_B)], {ID_A: 1, ID_B: 1}
+        )
+        self.assertEqual(pairs[0].relation, "contradicts")
+        self.assertIsNone(pairs[0].winner)
+
+    def test_the_proposal_keeps_claim_level_detail(self) -> None:
+        pairs = aggregate([self.verdict("contradicts")], {ID_A: 1, ID_B: 1})
+        claim = pairs[0].claims[0]
+        self.assertEqual(claim["left"], f"{ID_A}#1")
+        self.assertEqual(claim["right"], f"{ID_B}#0")
+        self.assertEqual(claim["quote_left"], "毕业论文（尚未冻结）")
+
+
+# ------------------------------------------------------------------- detect
+
+
+class DetectTests(unittest.TestCase):
+    def entries(self):
+        return [_entry(ID_A, OLD_TITLE), _entry(ID_B, NEW_TITLE)]
+
+    def test_one_pair_one_call(self) -> None:
+        transport = ScriptedTransport(SUPERSEDE_ANSWER)
+        provider = Provider(
+            AIConfig(base_url="https://example.test/v1", model="fake"), transport=transport
+        )
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            result = detect(self.entries(), provider, max_pairs=1)
+        self.assertEqual(result.calls, 1)
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(len(result.pairs), 1)
+        self.assertEqual(result.pairs[0].relation, "supersede")
+        self.assertGreater(result.chars_sent, 0)
 
     def test_a_single_entry_never_calls_the_model(self) -> None:
-        provider = _provider(_reply([]))
-        self.assertEqual(detect([_entry(ID_A, "x")], provider).calls, 0)
+        provider = _provider({"relation": "none"})
+        self.assertEqual(detect([_entry(ID_A, OLD_TITLE)], provider).calls, 0)
 
-    def test_too_many_entries_refuses_instead_of_truncating(self) -> None:
-        entries = [_entry(f"mem_20261124T100000_{i:08x}", "x") for i in range(MAX_ENTRIES + 1)]
-        with self.assertRaises(ValueError) as caught:
-            detect(entries, _provider(_reply([])))
-        self.assertIn("--category", str(caught.exception))
+    def test_the_planned_hook_can_cancel_before_spending_anything(self) -> None:
+        seen = {}
+
+        def planned(stats, count: int) -> bool:
+            seen["selected"] = stats.selected
+            seen["count"] = count
+            return False
+
+        transport = ScriptedTransport(SUPERSEDE_ANSWER)
+        provider = Provider(
+            AIConfig(base_url="https://example.test/v1", model="fake"), transport=transport
+        )
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            result = detect(self.entries(), provider, on_planned=planned)
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(result.calls, 0)
+        self.assertEqual(result.pairs, [])
+        self.assertGreater(seen["selected"], 0)
+        self.assertIn("取消", result.problems[0])
+
+    def test_progress_is_reported_for_every_pair(self) -> None:
+        seen = []
+        provider = _provider({"relation": "none"}, {"relation": "none"}, {"relation": "none"})
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            detect(self.entries(), provider, max_pairs=3,
+                   on_progress=lambda done, total, verdict: seen.append((done, total)))
+        self.assertEqual(seen[0][0], 1)
+        self.assertEqual(seen[-1][0], len(seen))
+
+    def test_repeated_transport_failure_stops_instead_of_burning_the_rest(self) -> None:
+        from memoryhub.ai.provider import AIError
+
+        class Broken:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, url, payload, headers, timeout):
+                self.calls += 1
+                raise AIError("boom")
+
+        transport = Broken()
+        provider = Provider(
+            AIConfig(base_url="https://example.test/v1", model="fake"), transport=transport
+        )
+        # Three similar entries produce enough pairs for the budget to trip.
+        corpus = self.entries() + [
+            _entry(ID_C, "毕业论文题目是财务共享中心流程优化研究")
+        ]
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            result = detect(corpus, provider, max_pairs=20)
+        self.assertLessEqual(transport.calls, 3)
+        self.assertTrue(any("中止" in problem for problem in result.problems))
+
+    def test_a_bad_answer_does_not_abort_the_run(self) -> None:
+        provider = _provider({"relation": "nonsense"}, {"relation": "none"})
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            result = detect(self.entries(), provider, max_pairs=2)
+        self.assertEqual(result.calls, 1)
+        self.assertTrue(any("relation" in problem for problem in result.problems))
 
 
 # ------------------------------------------------------------------ records
@@ -292,7 +434,7 @@ class RecordTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def pair(self, relation="supersedes", winner=ID_B, verified=True) -> ConflictPair:
+    def pair(self, relation="supersede", winner=ID_B, verified=True) -> ConflictPair:
         return ConflictPair(
             a=ID_A,
             b=ID_B,
@@ -301,6 +443,18 @@ class RecordTests(unittest.TestCase):
             evidence={ID_A: "毕业论文（尚未冻结）", ID_B: "《基于多 Agent 架构"},
             verified=verified,
             winner=winner,
+            scope="partial",
+            claims=[
+                {
+                    "left": f"{ID_A}#1",
+                    "right": f"{ID_B}#0",
+                    "relation": relation,
+                    "verified": verified,
+                    "quote_left": "毕业论文（尚未冻结）",
+                    "quote_right": "《基于多 Agent 架构",
+                    "reason": "题目已定",
+                }
+            ],
         )
 
     def test_path_is_independent_of_reporting_order(self) -> None:
@@ -318,12 +472,18 @@ class RecordTests(unittest.TestCase):
             0,
         )
 
+    def test_record_carries_the_scope_and_the_claim_detail(self) -> None:
+        record = self.pair().to_record(model="fake")
+        self.assertEqual(record["version"], 2)
+        self.assertEqual(record["scope"], "partial")
+        self.assertEqual(record["claims"][0]["left"], f"{ID_A}#1")
+
     def test_round_trip_and_ordering(self) -> None:
         first = self.pair().to_record(model="fake", detected_at="2026-11-25T10:00:00+08:00")
         second = self.pair(relation="contradicts", winner=None).to_record(
             model="fake", detected_at="2026-11-25T11:00:00+08:00"
         )
-        other = dict(second, pair=[ID_A, "mem_20261123T100000_cccccccc"])
+        other = dict(second, pair=[ID_A, ID_C])
         conflicts.save_record(self.root, first)
         conflicts.save_record(self.root, second)
         conflicts.save_record(self.root, other)
@@ -471,7 +631,7 @@ class SupersedeTests(unittest.TestCase):
         self.assertIn("环", str(caught.exception))
 
     def test_looks_mixed_flags_the_real_entry(self) -> None:
-        self.assertTrue(looks_mixed(_entry(ID_A, OLD_TITLE + "\n- 目录：D:\\WorkBuddy\n- 目标：整合")))
+        self.assertTrue(looks_mixed(_entry(ID_A, OLD_TITLE + "\n- 目录：D:/WorkBuddy\n- 目标：整合")))
         self.assertFalse(looks_mixed(_entry(ID_B, NEW_TITLE)))
 
 
@@ -565,7 +725,7 @@ class ConflictCliTests(unittest.TestCase):
         )
         self.assertIn(old, history)
 
-    def test_show_prints_the_reason_and_evidence(self) -> None:
+    def test_show_prints_the_quotes_and_the_command(self) -> None:
         self.setUpVault()
         old = self.add(OLD_TITLE)
         new = self.add(NEW_TITLE)
@@ -575,17 +735,31 @@ class ConflictCliTests(unittest.TestCase):
             ConflictPair(
                 a=old,
                 b=new,
-                relation="supersedes",
+                relation="supersede",
                 reason="前者称题目未定，后者已给出确定题目",
                 evidence={old: "毕业论文（尚未冻结）", new: "《基于多 Agent 架构"},
                 verified=True,
                 winner=new,
+                scope="partial",
+                claims=[
+                    {
+                        "left": f"{old}#1",
+                        "right": f"{new}#0",
+                        "relation": "supersede",
+                        "verified": True,
+                        "quote_left": "毕业论文（尚未冻结）：先确定题目",
+                        "quote_right": "《基于多 Agent 架构",
+                        "reason": "题目已定",
+                    }
+                ],
             ).to_record(model="fake"),
         )
         code, out, _err = self.run_cli("conflicts", "--show", old, "--vault", str(self.vault))
         self.assertEqual(code, 0)
         self.assertIn("题目未定", out)
-        self.assertIn("证据（逐字）", out)
+        self.assertIn("冲突的片段", out)
+        self.assertIn("毕业论文（尚未冻结）：先确定题目", out)
+        self.assertIn("只有部分片段冲突", out)
         self.assertIn(f"memoryhub supersede {old} --by {new}", out)
 
     def test_ai_without_configuration_exits_1(self) -> None:
@@ -594,11 +768,28 @@ class ConflictCliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("没有配置 AI", err)
 
+    def test_ai_prints_the_pairing_cut_before_sending(self) -> None:
+        """Declining must happen before any call, and the cut must be visible."""
+        self.setUpVault()
+        self.add(OLD_TITLE)
+        self.add(NEW_TITLE)
+        (self.home).mkdir(parents=True, exist_ok=True)
+        (self.home / "config.toml").write_text(
+            '[ai]\nbase_url = "http://127.0.0.1:9/v1"\nmodel = "fake"\n', encoding="utf-8"
+        )
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": "k"}):
+            code, out, err = self.run_cli(
+                "conflicts", "--ai", "--vault", str(self.vault), "--max-pairs", "3"
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("段对", out)
+        self.assertIn("--yes", err)
+
 
 class _ChatHandler(BaseHTTPRequestHandler):
     """A minimal OpenAI-compatible endpoint. Real HTTP, no network."""
 
-    reply: dict = {"pairs": []}
+    reply: dict = {"relation": "none"}
     last_request: dict = {}
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
@@ -627,6 +818,7 @@ class EndToEndHttpTests(unittest.TestCase):
         self.vault = self.base / "vault-root"
         self.home = self.base / "home"
         self.home.mkdir()
+        _ChatHandler.reply = {"relation": "none"}
         store = VaultStore(self.vault)
         store.init_layout()
         self.old = MemoryEntry.create(category="project", body=OLD_TITLE)
@@ -639,26 +831,13 @@ class EndToEndHttpTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def test_proposal_written_and_vault_untouched(self) -> None:
-        _ChatHandler.reply = {
-            "pairs": [
-                {
-                    "a": self.old.id,
-                    "b": self.new.id,
-                    "relation": "supersedes",
-                    "winner": self.new.id,
-                    "reason": "题目已定",
-                    "evidence": {self.old.id: "毕业论文（尚未冻结）", self.new.id: "《基于多 Agent 架构"},
-                }
-            ]
-        }
+    def run_against_server(self, argv) -> tuple:
         server = ThreadingHTTPServer(("127.0.0.1", 0), _ChatHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             port = server.server_address[1]
             (self.home / "config.toml").write_text(
-                # Quoted keys are not needed; config.load parses TOML directly.
                 f'[ai]\nbase_url = "http://127.0.0.1:{port}/v1"\nmodel = "fake"\n',
                 encoding="utf-8",
             )
@@ -669,21 +848,38 @@ class EndToEndHttpTests(unittest.TestCase):
             out, err = io.StringIO(), io.StringIO()
             with mock.patch.dict(os.environ, env, clear=False):
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                    code = main(
-                        ["conflicts", "--ai", "--yes", "--vault", str(self.vault)]
-                    )
+                    code = main(argv)
+            return code, out.getvalue(), err.getvalue()
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
 
-        self.assertEqual(code, 0, err.getvalue())
+    def test_proposal_written_and_vault_untouched(self) -> None:
+        _ChatHandler.reply = {
+            "relation": "supersede",
+            "newer": "b",
+            "quote_a": "毕业论文（尚未冻结）：先确定题目",
+            "quote_b": "《基于多 Agent 架构的企业财务共享中心工作流程优化研究》",
+            "direction": "基于多 Agent 架构",
+            "reason": "题目已定",
+        }
+        code, out, err = self.run_against_server(
+            ["conflicts", "--ai", "--yes", "--max-pairs", "1", "--vault", str(self.vault)]
+        )
+        self.assertEqual(code, 0, err)
         record_file = conflicts.record_path(self.vault, self.old.id, self.new.id)
-        self.assertTrue(record_file.is_file(), out.getvalue())
+        self.assertTrue(record_file.is_file(), out)
         record = json.loads(record_file.read_text(encoding="utf-8"))
-        self.assertEqual(record["relation"], "supersedes")
-        self.assertEqual(record["winner"], self.new.id)
+        self.assertEqual(record["relation"], "supersede")
         self.assertTrue(record["verified"])
+        self.assertEqual(record["scope"], "partial")
+
+        # The request must carry the two claims and nothing about dates.
+        prompt = _ChatHandler.last_request["messages"][1]["content"]
+        self.assertIn("毕业论文（尚未冻结）", prompt)
+        self.assertIn("基于多 Agent 架构", prompt)
+        self.assertNotIn("2026-", prompt)
 
         # The model answered; nothing in the vault may have moved.
         for entry_id in (self.old.id, self.new.id):
