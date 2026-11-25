@@ -1,6 +1,6 @@
 # HANDOFF · 项目交接
 
-> 最后更新：2026-11-25 ｜ 当前阶段：**阶段 1 / 1.5 / 2（除 P2-03b）/ 4 / 5 完成；下一步阶段 3**
+> 最后更新：2026-11-25 ｜ 当前阶段：**阶段 1 / 1.5 / 2（除 P2-03b）/ 3（P3-01/02 完成、P3-03 部分）/ 4 / 5 完成**
 
 任何接手的 AI Agent：**先读 `AGENTS.md`（工程契约），再读本文件（现状），最后读 `docs/02-roadmap.md` 领工单。** 不要跳过前三者直接改代码。
 
@@ -8,7 +8,9 @@
 
 ## 1. 一句话现状
 
-**三个来源（WorkBuddy / Claude Code / Codex）→ 审核 → vault → CLI / MCP 检索，全链路已通。** `scan`/`watch` 采集进 `inbox/pending`，`diff`/`approve` 审核入库，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**180 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：阶段 3 AI 整理（语义去重/冲突检测）、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+**三个来源（WorkBuddy / Claude Code / Codex）→ 整理 → 审核 → vault → CLI / MCP 检索，全链路已通。** `import` 采集进 `inbox/pending`（加 `--ai` 则把原文交给用户自己的模型拆分与分类），`diff`/`approve` 审核入库，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**213 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：语义去重与冲突检测（P3-04/05）、P3-00 fallback 显式化、回写分发、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
+
+**AI 整理怎么工作（ADR-016）**：`Adapter.discover()` 仍是算法（找文件是确定的）；`read()` 在 `--ai` 模式改走模型（拆分 + 分类是语义的）；模型返回的每一条必须带从原文逐字复制的 `quote`，归一化后定位不到就标记待核实。**这条 quote 校验是唯一能自动化的防幻觉手段，不要删。**
 
 **当前最大断点（2026-11-25）**：`D:/my-memory` 里 53 条全是 `pending`，`approved` 为 0。MCP 的可见性规则（ADR-012）只返回 `approved`，所以**别的 AI 现在查不到任何东西**。`doctor` 的 `mcp visibility` 会明确报这一条。下一步不是加功能，是让人把这 53 条审完——或者先做 P4-05 交互式审核。
 
@@ -50,14 +52,18 @@
 | `src/memoryhub/watcher/` | 轮询 + 防抖 + 哈希去重（`MtimeTracker`→`Debouncer`→`HashTracker`） | 稳定（P2-06） |
 | `src/memoryhub/mcp/server.py` | MCP 5 工具 + 可见性规则 + read/propose/admin 权限分级（ADR-012） | 稳定（P5-01、P5-02） |
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
-| `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析 | 稳定（注意：`save()` 会整份重写，加配置项前先改成合并写入） |
+| `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析、`save()` 支持嵌套表与读-合并-写 | 稳定（2026-11-25 已改为合并写入） |
 | `src/memoryhub/boundary.py` | 两仓隔离：`violations()`、远端检查、`pre-push` 钩子安装 | 稳定（ADR-013） |
-| `src/memoryhub/classify.py` | 加权规则分类（决定性权重 3）、`split_oversized` 的配套判据 | 稳定（ADR-014）；规则表是中文关键词，换语言需重写 |
+| `src/memoryhub/classify.py` | 加权规则分类（决定性权重 3），实测 52.8%，**仅作离线兜底**（ADR-015） | 降级：AI 模式下不参与 |
+| `src/memoryhub/ai/provider.py` | OpenAI 兼容 `chat/completions`，标准库 `urllib`，key 只读环境变量 | 稳定（ADR-016） |
+| `src/memoryhub/ai/schema.py` | 手写结构化校验：逐条丢弃、`quote` 必填、`body` 上限 1200 字 | 稳定，**不要换成 Pydantic**（ADR-005） |
+| `src/memoryhub/ai/organize.py` | 提示词 + 分批（24k 字）+ `quote` 定位校验 + 转 `pending` 条目 | 稳定；提示词是规格，改前先读文件头注释 |
+| `tools/audit_classify.py` | 规则分类对账：三层准确率 + 混淆矩阵，`--min-accuracy` 可作 CI 门禁 | 稳定，标注文件在 `docs/audits/` |
 | `tools/lint_staged.py` | 暂存内容 + 提交信息的路径/PII 扫描；`--all` 全量、`--message-only` | 稳定（ADR-013） |
 | `tools/hooks/` + `tools/setup_dev.sh` | `core.hooksPath` 钩子，clone 后跑一次 | 稳定；新增规则改 `RULES` 与 `pii-allowlist.txt` |
-| `src/memoryhub/cli.py` | 18 个命令 | 稳定，命令会继续增加 |
+| `src/memoryhub/cli.py` | **五条主线**：`init` `import` `approve` `mcp` `doctor`；其余命令保留但移出帮助表 | 稳定（ADR-016） |
 | `tests/test_store.py` | 37 个用例 | 会随功能增长 |
-| `tests/test_cli.py` | 32 个端到端用例（含审核流） | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
+| `tests/test_cli.py` | 38 个端到端用例（含审核流、帮助页收窄、`--ai` 错误路径） | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
 | `tests/test_adapters.py` | 33 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude + Codex 适配器 |
 | `tests/test_mcp.py` | 19 个用例 | 可见性规则 + 真实 stdio 握手（含 stdout 纯净性断言） |
 | `tests/test_watcher.py` | 11 个用例 | 防抖/哈希/排除 + 注入时钟 |
@@ -65,8 +71,14 @@
 | `tests/test_history.py` | 8 个用例 | 真实 git 仓：新增/修改/删除、`--since` 翻译、非仓与空仓 |
 | `tests/test_backup.py` | 8 个用例 | 本地提交 / 远端推送敏感闸门 / .gitignore |
 | `tests/test_safety.py` | 6 个用例 | 凭证与 PII 分级 |
+| `tests/test_ai.py` | 27 个用例 | 假传输桩：提示词契约、JSON 提取、逐条校验、quote 定位、配置读取 |
+| `tests/test_boundary.py` | 15 个用例 | 两仓隔离：vault 在 git 树内即拒、pre-push 钩子、远端 URL 判定 |
+| `tests/test_classify.py` | 15 个用例 | 加权规则、决定性权重、平票优先级 |
+| `tests/test_migrate.py` | 5 个用例 | 长条目切分三级回退、空标题剔除 |
 
-可用命令：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `sensitivity` `backup` `stats`
+可用命令（帮助页只列前五条，其余仍可调用）：
+
+`init` `import`（别名 `scan`，加 `--ai` 走模型）`approve` `mcp` `doctor` ｜ 审核辅助：`list` `show` `search` `diff` `reject` ｜ 高级：`new` `watch` `index` `audit` `log` `sensitivity` `recategorize` `backup` `stats`
 
 本轮新增的行为（都带测试）：
 
@@ -87,7 +99,7 @@ cd /d/project/MemoryHub
 pip install pyyaml mcp      # 运行时依赖
 export PYTHONPATH=src
 
-python -m unittest discover -s tests -v          # 期望 163 passed
+python -m unittest discover -s tests -v          # 期望 Ran 213；缺 mcp 时 1 error（test_mcp 导入），212 通过
 python -m memoryhub --vault /tmp/v --version     # 期望版本号
 python -m memoryhub init --vault /tmp/v          # 期望创建 8 个目录（含 `database/`）
 python -m memoryhub doctor --vault /tmp/v        # 期望 exit 0（git 项 WARN 也算通过）
@@ -103,7 +115,7 @@ python -m memoryhub mcp --vault /tmp/v            # 阻塞，等 MCP 客户端�
 - 采集：**三个适配器**（WorkBuddy / Claude / Codex）。WorkBuddy 覆盖两种形态（`memory/*_memory.md`、`user-*-personal/`），**工作区级 `<workspace>/.workbuddy/memory/` 未做（P2-03b）**；Claude Code 覆盖 `CLAUDE.md` 链（**指令层已真机验证**）+ auto memory（**目录存在但为空，未验证**）；Codex 只做了指令层，**记忆层（`memories_1.sqlite` + `sessions/*.jsonl`）未做**。Cursor / Trae 都没有
 - 监控：**有轮询 watcher（`watch`）**，2 秒间隔 + 防抖 + 哈希；没有 `watchdog`（有意，见 roadmap P2-06）
 - 索引：**有**（`database/index.db`，FTS5 trigram + `LIKE` 兜底），`search` 自动建/重建；坏掉会退回全表扫描
-- AI：无 Provider，无去重/冲突检测；`scan` 只做规则级切分，**语义去重与冲突一律没有**
+- AI：**有 Provider（P3-01）**，`import --ai` 把原文交给用户自己的模型做拆分与分类；**没有**摘要字段（P3-03 只完成一半）、**没有**语义去重与冲突检测（P3-04/05）；回写分发未实现（ADR-002 未推翻，方向见 §7 第 1 条的 2026-11-25 复审记录）
 - MCP：`--permission read|propose|admin`（默认 propose）；read=3 工具、propose=+propose、admin=+status。**任何级别都没有 `memory_write`**、**没有** HTTP 传输、**没有** 认证
 - 备份：**有** `backup`（本地提交 + 可选远端 + 敏感闸门 + 自动 .gitignore）
 
@@ -134,7 +146,7 @@ Claude Desktop 放在 `%APPDATA%\Claude\claude_desktop_config.json`；Cursor 放
 | 3 | 锁是自制 O_EXCL + 120 秒陈旧清理；`__exit__` 无条件删锁文件 | 极端并发下有竞态；多进程（MCP + watcher）是阶段 5 的常态 | 阶段 5 评估 |
 | 3 | 仅在 Python 3.12/3.13 验证，声明 `>=3.11` | 3.11 兼容性未测（`pyyaml` 在 3.11 上的轮子也未验证） | 加 CI 矩阵 |
 | 4 | 无 `LICENSE` 文件 | 公开仓默认"保留所有权利"，与开源定位矛盾 | **待拍板**，倾向 Apache-2.0 |
-| 5 | `config.save()` 整份重写配置 | 阶段 3 加 `ai.*` 后，`init` 会把它们抹掉 | 阶段 3 前改成合并 |
+| 5 | ~~`config.save()` 整份重写配置~~ | 阶段 3 加 `ai.*` 后 `init` 会抹掉它们 | **已解决**（2026-11-25：`save()` 支持嵌套表，`init` 改为读-合并-写，`[ai]` 保留有测试） |
 | 6 | `supersedes` 不做引用存在性校验，可悬空 | 取代链是核心资产，却没有完整性检查 | 阶段 3 冲突检测时补 |
 | 7 | `status` 字段与文件位置是两个真相源 | 手改 `status` 不会移动文件。保存过期快照曾把已批准条目搬回 inbox（P4-03 写测试时实测到）。**已加乐观并发校验**：`_base_updated_at` 与磁盘不一致时抛 `StaleEntryError`。剩余局限：时间戳是秒级，同一秒内的并发写入检测不到 | 已修复主路径；如需同秒保护，把 `now_iso` 改成微秒 |
 | 8 | `AGENTS.md`「测试必须能在无第三方包的机器上跑通」已不成立 | 新增了 `pyyaml` 依赖，新人按契约描述会以为不用装 | **已解决**（2026-11-25，AGENTS.md 已改为"需 pyyaml + mcp，无需网络"） |
@@ -143,7 +155,7 @@ Claude Desktop 放在 `%APPDATA%\Claude\claude_desktop_config.json`；Cursor 放
 
 ## 7. 决策边界（改之前必须看）
 
-不可推翻的决策在 `AGENTS.md`（7 条）与 `docs/01-decisions.md`（ADR-001 至 ADR-011，其中 ADR-010 / ADR-011 待拍板）。最容易被误做的三条：
+不可推翻的决策在 `AGENTS.md`（7 条）与 `docs/01-decisions.md`（ADR-001 至 ADR-016，其中 ADR-010 / ADR-011 / ADR-015 的三项变更待拍板）。最容易被误做的三条：
 
 1. **不要实现"把中央记忆写回各 AI 工具"** —— 这是策划书原方案，已否决（ADR-002）。看到 `exports/` 就想"顺手写回去"是本项目第一大坑。
 2. **不要让 AI 产出直接进 `vault/`** —— 必须 `status=pending`，`review` 级别要人批（ADR-003，本轮已把 `--approve` 的绕过口封上）。
@@ -155,13 +167,14 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 
 ## 8. 下一步
 
-采集、审核、检索、备份已闭环；缺的是**整理能力**。按顺序：
+采集、整理（单向）、审核、检索、备份已闭环。**当前真正的拦路虎不是缺功能，是 53 条 `pending` 一条都没批**，导致 MCP 对外恒为空。按优先级：
 
-1. **先还技术债 #5**：`config.save()` 改为合并写入（否则阶段 3 的 `ai.*` 配置会被 `init` 抹掉）。
-2. **P3-01 Provider 抽象**：OpenAI 兼容 / 自定义 Base URL，未配置时整体跳过，无 API 全功能回归测试。
-3. **P3-02 → P3-05**：Pydantic 校验 → 分类摘要 → 语义去重 → 冲突检测；产出恒为 `pending` 提案。
-4. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）。
-5. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、已知问题 #1 路径脱敏。
+1. **P4-05 交互式审核**（一屏一条，按键 `批 / 拒 / 改分类 / 跳`，可中断续审）。这是唯一能解开 §1 断点的工单，不做它，后面所有能力都没有用户。
+2. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。
+3. **P3-04 → P3-05 语义去重与冲突检测**：审计数据证明这两项对 AI 的依赖度最高（改错分类 1 秒，判断"是否同一件事"要 1 分钟），应排在 P3-03 的摘要之前。
+4. **P3-03 余下部分**：摘要字段（拆分与分类已通）。
+5. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
+6. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。
 
 **AGENTS 契约已同步**（2026-11-25，经所有者批准）：当前阶段、决策 6 限定输出侧、决策 7 依赖从严、目录职责、测试依赖说明。
 

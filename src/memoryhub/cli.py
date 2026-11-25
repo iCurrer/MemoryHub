@@ -13,6 +13,7 @@ from typing import List, Optional, Tuple
 
 from . import __version__, boundary, config
 from .adapters import ADAPTERS, build
+from .ai import AIConfig, AIError, Provider, organize
 from .backup import (
     GitUnavailable,
     HistoryUnavailable,
@@ -99,7 +100,11 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     store = VaultStore(vault)
     created = store.init_layout()
-    written = config.save({"vault": config.as_posix(vault), "initialized_at": now_iso()})
+    # Merge, never replace: re-running `init` used to rewrite the whole config
+    # and silently drop a hand-written `[ai]` section (known issue #5).
+    settings = config.load()
+    settings.update({"vault": config.as_posix(vault), "initialized_at": now_iso()})
+    written = config.save(settings)
 
     print(f"vault    {vault}")
     for path in created:
@@ -299,6 +304,9 @@ def cmd_new(args: argparse.Namespace) -> int:
 def cmd_scan(args: argparse.Namespace) -> int:
     """Collect from every adapter into ``inbox/pending`` (ADR-002: read-only)."""
     store = _store(args)
+    if getattr(args, "ai", False):
+        return _scan_with_ai(store, args)
+
     selected = [args.adapter] if args.adapter else sorted(ADAPTERS)
 
     existing_entries, unreadable = store.scan()
@@ -365,6 +373,130 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print(f"entries   {imported} imported, {skipped} already present")
         if archived:
             print(f"archived  {archived} superseded (recoverable with `list --status archived`)")
+    if failed:
+        print(f"{failed} source(s) failed", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _scan_with_ai(store: VaultStore, args: argparse.Namespace) -> int:
+    """Read sources verbatim and let the user's own model split and categorise.
+
+    Only one thing changes versus the default path: ``read``. ``discover()`` stays
+    algorithmic because finding files is deterministic and cheap; splitting and
+    naming a fact are semantic, and the rule-based versions of those measured
+    52.8% on the real vault (``docs/04-classify-audit.md``).
+
+    Sending memory off the machine is a privacy event, so it is announced and
+    confirmed rather than implied by a flag. The content is NOT redacted before
+    sending -- saying otherwise would be a lie that makes people trust the wrong
+    thing.
+    """
+    try:
+        cfg = AIConfig.from_config()
+        if cfg is None:
+            print(
+                "error: 没有配置 AI，--ai 不可用。\n"
+                f"       在 {config.config_path()} 里加 [ai] 的 base_url 与 model：\n"
+                '           [ai]\n'
+                '           base_url = "https://api.deepseek.com/v1"\n'
+                '           model = "deepseek-chat"\n'
+                "       不配置也能用：默认路径按规则切分，功能完整。",
+                file=sys.stderr,
+            )
+            return 1
+        cfg.api_key()
+    except AIError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    selected = [args.adapter] if getattr(args, "adapter", None) else sorted(ADAPTERS)
+    plan: List[Tuple[str, object, str]] = []
+    total_chars = 0
+    failed = 0
+
+    for name in selected:
+        adapter = build(name)
+        try:
+            discovered = adapter.discover()
+        except OSError as exc:
+            print(f"error: {name}: discovery failed: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        for source in discovered:
+            try:
+                text = Path(source.path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"error: {name}: cannot read {source.path}: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+            if not text.strip():
+                continue
+            plan.append((name, source, text))
+            total_chars += len(text)
+
+    if not plan:
+        print("没有可整理的内容。")
+        return 0 if not failed else 1
+
+    print(f"AI 整理：{len(plan)} 个文件，共 {total_chars:,} 字")
+    print(f"  端点  {cfg.base_url}")
+    print(f"  模型  {cfg.model}")
+    print("  注意  内容会离开本机，发送前不做脱敏。")
+    if not getattr(args, "yes", False):
+        if not sys.stdin.isatty():
+            print(
+                "error: 需要确认。非交互环境下加 --yes，表示已知悉内容会被发送到该端点。",
+                file=sys.stderr,
+            )
+            return 1
+        if input("继续？[y/N] ").strip().lower() not in ("y", "yes"):
+            print("已取消，未发送任何内容。")
+            return 1
+    print()
+
+    provider = Provider(cfg)
+    seen_entries, unreadable = store.scan()
+    _unreadable_hint(unreadable)
+    seen = {(e.source_adapter, e.source_path, e.body) for e in seen_entries}
+
+    dry_run = getattr(args, "dry_run", False)
+    imported = skipped = unverified = 0
+    problems: List[str] = []
+
+    for name, source, text in plan:
+        print(f"  {source.label()}  ", end="", flush=True)
+        try:
+            result = organize(text, provider, source=source)
+        except AIError as exc:
+            print("failed")
+            print(f"error: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        fresh, duplicate = import_entries(store, result.entries, seen, write=not dry_run)
+        imported += fresh
+        skipped += duplicate
+        unverified += result.unverified
+        problems.extend(f"{source.label()}: {problem}" for problem in result.problems)
+        print(
+            f"{len(result.entries)} 条 → {fresh} new, {duplicate} dup, "
+            f"{result.unverified} 待核实"
+        )
+
+    print()
+    if dry_run:
+        print(f"entries   {imported} would be imported (dry run, nothing written)")
+    else:
+        print(f"entries   {imported} imported, {skipped} already present")
+        if unverified:
+            print(f"unverified {unverified} 条 quote 定位不到，审核时优先看这些")
+    if problems:
+        print()
+        print(f"{len(problems)} 个问题：")
+        for line in problems[:20]:
+            print(f"  {line}")
+        if len(problems) > 20:
+            print(f"  ... 其余 {len(problems) - 20} 条省略")
     if failed:
         print(f"{failed} source(s) failed", file=sys.stderr)
         return 1
@@ -887,9 +1019,22 @@ def build_parser() -> argparse.ArgumentParser:
         prog="memoryhub",
         parents=[vault_arg],
         description="Cross-AI personal memory governance layer (local-first).",
+        epilog=(
+            "五条主线：init 建库 · import 导入（--ai 交给模型整理）· approve 审核通过 · "
+            "mcp 对外服务 · doctor 体检。\n"
+            "审核辅助仍可用但不占主屏：list show search diff reject，"
+            "以及其他高级命令（memoryhub <命令> --help）。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"memoryhub {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(
+        dest="command",
+        required=True,
+        # Keep the usage line in step with the five-command table below; the
+        # default metavar would enumerate all 20 verbs and undo the whole point.
+        metavar="{init,import,approve,mcp,doctor}",
+    )
 
     p_init = sub.add_parser(
         "init", parents=[vault_arg], help="create the vault layout and write config"
@@ -929,13 +1074,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_new.set_defaults(func=cmd_new)
 
     p_scan = sub.add_parser(
-        "scan", parents=[vault_arg], help="collect from external sources into inbox"
+        "import",
+        aliases=["scan"],
+        parents=[vault_arg],
+        help="collect from sources into inbox; --ai lets your model split and categorise",
     )
     p_scan.add_argument(
         "--adapter",
         choices=sorted(ADAPTERS),
         default=None,
         help="only run one adapter (default: all)",
+    )
+    p_scan.add_argument(
+        "--ai",
+        action="store_true",
+        help="use your own model to split, categorise and summarise. Needs [ai] in "
+        "config. Content is sent to that endpoint WITHOUT local redaction.",
+    )
+    p_scan.add_argument(
+        "--yes",
+        action="store_true",
+        help="with --ai: skip the confirmation prompt (for scripts)",
     )
     p_scan.add_argument(
         "--dry-run",
@@ -1092,6 +1251,16 @@ def build_parser() -> argparse.ArgumentParser:
         "stats", parents=[vault_arg], help="show vault statistics"
     )
     p_stats.set_defaults(func=cmd_stats)
+
+    #: Five commands carry the product; the rest are reachable but off the first
+    #: screen. 20 verbs in `--help` is a large part of why the tool reads as
+    #: complicated -- see docs/04-classify-audit.md for what the code actually is.
+    #: ``_choices_actions`` is the table argparse renders for subcommands; entries
+    #: are removed in place (not help=SUPPRESS, which prints the literal word).
+    mainline = {"init", "import", "scan", "approve", "mcp", "doctor"}
+    sub._choices_actions[:] = [
+        action for action in sub._choices_actions if action.dest in mainline
+    ]
 
     return parser
 

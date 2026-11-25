@@ -365,6 +365,76 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("no unmarked sensitive content", out)
 
+    # ------------------------------------------------- five-command surface
+
+    def test_help_lists_only_the_mainline(self) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                main(["--help"])
+        text = out.getvalue()
+        for name in ("init", "import", "approve", "mcp", "doctor"):
+            self.assertIn(name, text)
+        # Twenty verbs on the first screen is a large part of why the tool read
+        # as complicated; these must stay out of it but remain callable.
+        for hidden in ("recategorize", "watch", "backup", "sensitivity", "stats"):
+            self.assertNotIn(hidden, text)
+        self.assertNotIn("==SUPPRESS==", text)
+
+    def test_import_is_the_new_name_and_scan_still_works(self) -> None:
+        self.init_vault()
+        for name in ("import", "scan"):
+            code, _out, err = self.run_cli(name, "--vault", str(self.vault), "--dry-run")
+            self.assertEqual(code, 0, f"{name}: {err}")
+
+    def test_hidden_commands_remain_reachable(self) -> None:
+        self.init_vault()
+        code, out, err = self.run_cli("stats", "--vault", str(self.vault))
+        self.assertEqual(code, 0, err)
+        self.assertIn("total", out)
+
+    # ------------------------------------------------------------ --ai gate
+
+    def test_ai_without_config_explains_how_to_configure(self) -> None:
+        self.init_vault()
+        code, _out, err = self.run_cli(
+            "import", "--vault", str(self.vault), "--ai", "--yes"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("没有配置 AI", err)
+        self.assertIn("[ai]", err)
+
+    def test_ai_with_config_but_no_key_names_the_variable(self) -> None:
+        self.init_vault()
+        cfg = self.home / "config.toml"
+        existing = cfg.read_text(encoding="utf-8")
+        cfg.write_text(
+            existing + '\n[ai]\nbase_url = "https://example.test/v1"\nmodel = "m"\n',
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"MEMORYHUB_API_KEY": ""}):
+            code, _out, err = self.run_cli(
+                "import", "--vault", str(self.vault), "--ai", "--yes"
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("MEMORYHUB_API_KEY", err)
+
+    def test_reinit_keeps_a_hand_written_ai_section(self) -> None:
+        # Known issue #5: save() used to rewrite the whole file, so a second
+        # `init` deleted the [ai] table the user had just added.
+        self.init_vault()
+        cfg = self.home / "config.toml"
+        cfg.write_text(
+            cfg.read_text(encoding="utf-8")
+            + '\n[ai]\nbase_url = "https://example.test/v1"\nmodel = "m"\n',
+            encoding="utf-8",
+        )
+        self.init_vault()
+        text = cfg.read_text(encoding="utf-8")
+        self.assertIn("[ai]", text)
+        self.assertIn("https://example.test/v1", text)
+        self.assertIn('vault = "', text)
+
 
 if __name__ == "__main__":
     unittest.main()

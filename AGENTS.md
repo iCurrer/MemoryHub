@@ -10,8 +10,10 @@ MemoryHub 是**跨 AI 工具的个人记忆治理层**：采集各 AI 工具的�
 
 ## 当前阶段
 
-阶段 1 / 1.5 / 2（除 P2-03b）/ 4 / 5 已完成：数据层、三个只读采集适配器、轮询监控、FTS5 索引、CLI 审核流、MCP（含权限分级）、敏感检测、Git 备份。
-阶段 3（AI 整理）与阶段 6（产品化）尚未实现，**不得在 README 或文档中声称已实现**。实时进度以 `HANDOFF.md` 为准。
+阶段 1 / 1.5 / 2（除 P2-03b）/ 3（部分：P3-01 与 P3-02 完成，P3-03 仅拆分与分类，摘要未做）/ 4 / 5 已完成：数据层、三个只读采集适配器、轮询监控、FTS5 索引、CLI 审核流、MCP（含权限分级）、敏感检测、Git 备份、AI 层（用户自带 API key）。
+阶段 3 剩余部分（P3-00 / P3-04 / P3-05）与阶段 6（产品化）尚未实现，**不得在 README 或文档中声称已实现**。实时进度以 `HANDOFF.md` 为准。
+
+> **AI 层的定位不可被误解**：`ai/` 只负责「读内容并给出结构化提案」，产出恒为 `status: pending`，且每条必须带从原文逐字复制的 `quote`（定位不到即标记待核实）。**找文件仍由算法做**（`Adapter.discover()`），因为那是确定的；读内容交给模型，因为那是语义的。不要把 `quote` 校验去掉，它是唯一能自动化的防幻觉手段。见 ADR-016。
 
 ## 上手顺序（AI Agent 必读）
 
@@ -56,6 +58,7 @@ src/memoryhub/
   storage/markdown_store.py  # 唯一写入入口：原子写、文件锁、扫描、检索
   storage/index.py       # SQLite FTS5 索引（可从 Markdown 重建）
   adapters/              # 外部来源适配器（只读）：workbuddy / claude / codex
+  ai/                    # 用户自带 API key 的整理层：provider / schema / organize（只产 pending 提案）
   watcher/               # 轮询 + 防抖 + 哈希去重
   mcp/                   # MCP stdio 服务端与权限分级
   backup/                # vault 的 git 备份与变更历史

@@ -44,6 +44,14 @@ def _quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _render(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return _quote(str(value))
+
+
 def load() -> Dict[str, Any]:
     path = config_path()
     if not path.is_file():
@@ -53,18 +61,29 @@ def load() -> Dict[str, Any]:
 
 
 def save(data: Dict[str, Any]) -> Path:
-    """Write config atomically. Flat scalar values only."""
+    """Write config atomically. Scalars at top level, dicts become tables.
+
+    Tables matter because ``[ai]`` is written by hand and would otherwise be
+    worse than useless: the old version flattened everything to ``key = value``,
+    so one ``init`` silently deleted the section the user had just added. Callers
+    must merge into ``load()`` rather than passing a fresh dict -- that contract
+    is what makes the round trip lossless, and ``init`` does it that way.
+    """
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    scalars = {k: v for k, v in data.items() if not isinstance(v, dict)}
+    tables = {k: v for k, v in data.items() if isinstance(v, dict)}
+
     lines = ["# MemoryHub configuration. Never store secrets in this file."]
-    for key in sorted(data):
-        value = data[key]
-        if isinstance(value, bool):
-            lines.append(f"{key} = {'true' if value else 'false'}")
-        elif isinstance(value, (int, float)):
-            lines.append(f"{key} = {value}")
-        else:
-            lines.append(f"{key} = {_quote(str(value))}")
+    for key in sorted(scalars):
+        lines.append(f"{key} = {_render(scalars[key])}")
+    for name in sorted(tables):
+        lines.append("")
+        lines.append(f"[{name}]")
+        for key in sorted(tables[name]):
+            lines.append(f"{key} = {_render(tables[name][key])}")
+
     text = "\n".join(lines) + "\n"
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
