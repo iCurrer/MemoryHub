@@ -331,7 +331,7 @@ class CliTests(unittest.TestCase):
 
     def test_audit_reports_under_classified_entries(self) -> None:
         clean = self.make("prefers pnpm")
-        leaky = self.make("lives at 北京市示例区示例路 390 号")
+        leaky = self.make("lives at 示例市示例区示例路 1 号")  # pii:synthetic
         code, out, _err = self.run_cli("audit")
         self.assertEqual(code, 0)
         self.assertIn(leaky, out)
@@ -339,7 +339,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("--apply", out)
 
     def test_audit_apply_blocks_the_leaky_entry(self) -> None:
-        leaky = self.make("lives at 北京市示例区示例路 390 号")
+        leaky = self.make("lives at 示例市示例区示例路 1 号")  # pii:synthetic
         code, out, _err = self.run_cli("audit", "--apply")
         self.assertEqual(code, 0)
         self.assertIn("1 entries re-classified", out)

@@ -65,7 +65,7 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
   5. `docs/01-decisions.md` 的 ADR-005 已追加"部分取代"说明。
 - **禁止**：不要同时改动目录结构与字段名。这是纯实现替换。
 - **实际结果**：38 → 45 个测试。三个额外处理记在 ADR-005：YAML 1.2 布尔规则、时间戳还原为字符串、重复键报错。
-- **遗留**：`AGENTS.md` 的"测试可在无第三方包的机器上跑通"对阶段 2 不再成立，待所有者修订措辞。
+- ~~**遗留**：`AGENTS.md` 的"测试可在无第三方包的机器上跑通"对阶段 2 不再成立~~ —— **已解决**（2026-11-25，AGENTS.md 已同步）。
 
 ### P2-02 SQLite 索引 + FTS5 trigram ✅
 
@@ -314,6 +314,23 @@ PYTHONPATH=src python -m memoryhub doctor                 # 必须无 FAIL
 - ✅ `memory_propose`（2026-11-24 提前）：只产生 `pending`，命中密钥形状即 `blocked`。
   动因见 ADR-012 追加段——云端记忆采不到，只能让客户端自己交
 - ⬜ `memory_status` —— 属 P5-02 权限分级的一部分，暂缓
+
+---
+
+### P5-05 两仓边界门禁（代码仓永不接收记忆）✅
+
+- **落位**：`src/memoryhub/boundary.py`、`tools/lint_staged.py`、`tools/hooks/{pre-commit,commit-msg}`、`tools/setup_dev.sh`
+- **动因**：ADR-013。此前两次真实泄露（文件里的 profile UUID、**提交信息里**的真实住址），且验证了 `force-push` 不删除 GitHub 上的不可达对象
+- **实际落地**：
+  - `boundary.violations()`：vault 位于任何 git 工作树内即拒绝，`init` 退出码 2，无 `--force`
+  - `init` 往 vault 写 `pre-push` 钩子：远端 URL 含 memoryhub 字样即拒推（含 `$2` 参数优先，避免读到旧配置）
+  - `doctor` 新增 `repo isolation` / `vault remote` 两条硬检查
+  - `lint_staged.py`：7 条规则（地址 / 家目录 / UUID / 手机号 / 身份证 / 密钥 / 真实校名），扫描暂存文件**与提交信息**；测试夹具用 `# pii:synthetic` 逐行豁免
+- **完成判据**（全部达成，`tests/test_boundary.py` 15 例）：
+  1. vault 在 git 工作树内 → 拒绝；独立目录或自身为仓 → 通过
+  2. `pre-push` 钩子对代码仓 URL 返回 1、对私有 URL 返回 0
+  3. 提交信息含地址 / UUID → 拦截；正常信息 → 放行
+  4. `lint_staged.py --all` 在本仓库当前状态返回 0
 
 ---
 

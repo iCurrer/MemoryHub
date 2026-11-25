@@ -1,0 +1,17 @@
+# Exemptions for tools/lint_staged.py — one "<rule> <glob>" per line.
+#
+# Rules: address, home, uuid, phone, national-id, secret, school-name
+#
+# Only synthetic fixtures belong here. A test that needs a realistic-looking
+# value must use an obviously fake one: a dummy mobile in the 1000-0000 form,
+# an @example.com address, or a path under D:/tmp with no real segment.
+# Anything under a vault data path is never exempt — that check has no bypass.
+
+home    tests/**
+phone   tests/**
+national-id tests/**
+secret  tests/**
+
+# The detector necessarily contains the strings it searches for — this is a
+# signature list, not a leak. Keep it to this one file.
+school-name tools/lint_staged.py

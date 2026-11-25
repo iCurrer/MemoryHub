@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import __version__, config
+from . import __version__, boundary, config
 from .adapters import ADAPTERS, build
 from .backup import (
     GitUnavailable,
@@ -83,6 +83,19 @@ def cmd_init(args: argparse.Namespace) -> int:
         vault = Path(vault_arg).expanduser().resolve()
     else:
         vault = config.resolve_vault()
+
+    unsafe = boundary.violations(vault)
+    if unsafe:
+        print(f"refusing to initialise a vault at {vault}", file=sys.stderr)
+        for problem in unsafe:
+            print(f"  - {problem}", file=sys.stderr)
+        print(
+            "\nthe code repository and the vault repository must stay separate. "
+            "Pick a path outside any git working tree, e.g. D:/my-memory.",
+            file=sys.stderr,
+        )
+        return 2
+
     store = VaultStore(vault)
     created = store.init_layout()
     written = config.save({"vault": config.as_posix(vault), "initialized_at": now_iso()})
@@ -101,14 +114,20 @@ def cmd_init(args: argparse.Namespace) -> int:
         print("git      not found on PATH; versioned backup unavailable")
     elif (vault / ".git").exists():
         print("git      repository already exists")
+        hook = boundary.install_pre_push_hook(vault)
+        print(f"         pre-push guard {'installed' if hook else 'unavailable'}")
     else:
         result = subprocess.run(
             [git, "init"], cwd=str(vault), capture_output=True, text=True, check=False
         )
         if result.returncode == 0:
             print("git      initialised (no commit yet)")
+            hook = boundary.install_pre_push_hook(vault)
+            print(f"         pre-push guard {'installed' if hook else 'unavailable'}")
         else:
             print(f"git      init failed: {result.stderr.strip()}")
+
+    print("boundary vault is outside the code repository")
 
     print("\nnext:")
     print(f"  set MEMORYHUB_VAULT={vault}   (or rely on the written config)")
@@ -187,6 +206,23 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "WARN" if sync_hits else "OK",
         "vault is outside OneDrive" if not sync_hits else f"vault is under {sync_hits[0]}",
     )
+
+    isolation = boundary.violations(vault)
+    add(
+        "repo isolation",
+        "OK" if not isolation else "FAIL",
+        "vault is outside the code repository" if not isolation else isolation[0],
+    )
+
+    remotes = boundary.list_remotes(vault)
+    remote_problems = boundary.remote_violations(remotes)
+    if not remotes:
+        remote_level, remote_detail = "OK", "no remote (local only)"
+    elif remote_problems:
+        remote_level, remote_detail = "FAIL", remote_problems[0]
+    else:
+        remote_level, remote_detail = "OK", ", ".join(remotes)
+    add("vault remote", remote_level, remote_detail)
 
     width = max(len(name) for name, _, _ in checks)
     failed = 0

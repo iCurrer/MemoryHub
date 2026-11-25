@@ -10,8 +10,8 @@ MemoryHub 是**跨 AI 工具的个人记忆治理层**：采集各 AI 工具的�
 
 ## 当前阶段
 
-阶段 1（核心数据层）已完成骨架：记忆模型、frontmatter 读写、原子写入、CLI 基础命令、单元测试。
-阶段 2 及以后尚未实现，**不得在 README 或文档中声称已实现**。
+阶段 1 / 1.5 / 2（除 P2-03b）/ 4 / 5 已完成：数据层、三个只读采集适配器、轮询监控、FTS5 索引、CLI 审核流、MCP（含权限分级）、敏感检测、Git 备份。
+阶段 3（AI 整理）与阶段 6（产品化）尚未实现，**不得在 README 或文档中声称已实现**。实时进度以 `HANDOFF.md` 为准。
 
 ## 上手顺序（AI Agent 必读）
 
@@ -40,10 +40,10 @@ MemoryHub 是**跨 AI 工具的个人记忆治理层**：采集各 AI 工具的�
 1. **不做回写分发。** 不向 Codex / Claude / Cursor 的原生记忆文件写入任何内容。只读采集 + 单向生成只读快照。理由见 `docs/01-decisions.md` ADR-002。
 2. **三级信任替代逐条审核。** `auto`（低风险自动入库，靠 Git 可回滚）/ `review`（进 inbox 等人批）/ `blocked`（敏感或冲突，阻断）。见 ADR-003。
 3. **先不做 Web UI。** 阶段 1-3 只有 CLI 与 MCP。见 ADR-004。
-4. **代码与数据物理分离。** 本仓库不含 vault；vault 路径由配置提供，默认 `D:/my-memory`。
+4. **代码与数据物理分离，且由机制保证。** 本仓库只装代码，不含 vault、索引、日志、来源快照；vault 路径由配置提供，默认 `D:/my-memory`。**云端只有这一个仓（代码仓）；每个用户的记忆仓各自独立、自选远端，MemoryHub 不代建不代推。** 三道门禁不得删除或绕过：`init` 拒绝把 vault 建在任何 git 工作树内；`doctor` 把 `repo isolation` / `vault remote` 当硬检查；`tools/hooks/` 的 pre-commit 与 commit-msg 扫描暂存内容**与提交信息**。见 ADR-013。
 5. **单一 Core API。** 所有写操作必须经过 `memoryhub.storage`，Adapter 与 CLI 一律不得直接写文件。
-6. **Markdown 是唯一真相源。** 任何索引、SQLite、缓存都必须可从 Markdown 重建；不得出现只能从索引读到的记忆。
-7. **阶段 1 零第三方运行时依赖。** 只用标准库。原因见 ADR-005。
+6. **Markdown 是唯一真相源（仅指输出侧 vault）。** 任何索引、SQLite、缓存都必须可从 vault 的 Markdown 重建；不得出现只能从索引读到的记忆。输入侧（上游来源）允许 md / jsonl / zstd-jsonl / sqlite（ADR-011）。
+7. **依赖从严。** 阶段 1 曾零第三方依赖（ADR-005）；现仅允许 `pyyaml`（ADR-005 部分取代）与 `mcp`（ADR-012）。新增任何运行时依赖必须先写 ADR。
 
 ## 目录职责
 
@@ -51,10 +51,16 @@ MemoryHub 是**跨 AI 工具的个人记忆治理层**：采集各 AI 工具的�
 src/memoryhub/
   config.py              # 配置读写（TOML）、vault 路径解析
   models.py              # MemoryEntry 领域模型与校验
-  frontmatter.py         # frontmatter 最小解析/序列化（阶段 1 实现，阶段 2 换真 YAML 库）
+  frontmatter.py         # frontmatter 读写（PyYAML）
+  safety.py              # 敏感分级：凭证 / 强 PII / 弱 PII
   storage/markdown_store.py  # 唯一写入入口：原子写、文件锁、扫描、检索
+  storage/index.py       # SQLite FTS5 索引（可从 Markdown 重建）
+  adapters/              # 外部来源适配器（只读）：workbuddy / claude / codex
+  watcher/               # 轮询 + 防抖 + 哈希去重
+  mcp/                   # MCP stdio 服务端与权限分级
+  backup/                # vault 的 git 备份与变更历史
   cli.py                 # CLI 入口
-tests/                   # unittest，必须能在无网络、无第三方包的机器上跑通
+tests/                   # unittest，需 pyyaml + mcp，必须能在无网络的机器上跑通
 docs/                    # 定位与决策记录
 ```
 
@@ -77,12 +83,17 @@ docs/                    # 定位与决策记录
 - 禁止在 vault 内保存 API Key、令牌、密码；敏感字段一律写引用标识。
 - 禁止为了"跑通"而吞掉异常或静默降级；失败要显式报错。
 - 禁止在未经确认的情况下改写已定决策、迁移目录结构、新增依赖。
+- 禁止提交与真实身份绑定的一致性信息：住址、手机号、身份证号、学校/单位名、本机 profile UUID、含用户名的绝对路径。测试需要这类形状时用明显虚构的值，并在该行加 `# pii:synthetic`。
+- 禁止把 vault 路径指向本仓库内部，或给 vault 配置指向代码仓的远端——即使只是"临时测试"。
+- **提交信息视同发布内容。** 它会出现在公开页面上，且历史改写无法从 GitHub 彻底删除。
 
 ## 验收方式
 
 ```bash
+sh tools/setup_dev.sh                              # 首次 clone 后跑一次，启用边界钩子
 PYTHONPATH=src python -m unittest discover -s tests -v
 PYTHONPATH=src python -m memoryhub doctor
+python tools/lint_staged.py --all                  # 边界与身份信息全量扫描
 ```
 
 两项都通过才算完成一次改动。新增功能必须补测试；只加功能不加测试的提交视为未完成。

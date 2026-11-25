@@ -1,0 +1,16 @@
+#!/bin/sh
+# Pre-commit guard: refuses to commit vault data or personal identifiers.
+# Installed via `git config core.hooksPath tools/hooks` (see tools/setup_dev.sh).
+
+root=$(git rev-parse --show-toplevel) || exit 1
+
+if command -v python3 >/dev/null 2>&1; then
+  py=python3
+elif command -v python >/dev/null 2>&1; then
+  py=python
+else
+  echo "pre-commit: no python on PATH, skipping boundary check" >&2
+  exit 0
+fi
+
+exec "$py" "$root/tools/lint_staged.py"

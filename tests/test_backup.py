@@ -121,7 +121,7 @@ class BackupTests(unittest.TestCase):
 
     def test_sensitive_entries_are_detected(self) -> None:
         clean = self.add("prefers pnpm")
-        leaky = self.add("lives at 示例区示例路 390 号", sensitivity="sensitive")
+        leaky = self.add("lives at 示例市示例区示例路 1 号", sensitivity="sensitive")  # pii:synthetic
         flagged = {entry.id for entry in sensitive_entries(self.store)}
         self.assertEqual(flagged, {leaky.id})
         self.assertNotIn(clean.id, flagged)

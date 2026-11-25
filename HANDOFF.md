@@ -1,6 +1,6 @@
 # HANDOFF · 项目交接
 
-> 最后更新：2026-11-24 15:12 ｜ 当前阶段：**阶段 1 + 1.5 + P2-01 + P2-03/03a + P2-05 + P5-01(3/5) 完成**
+> 最后更新：2026-11-25 ｜ 当前阶段：**阶段 1 / 1.5 / 2（除 P2-03b）/ 4 / 5 完成；下一步阶段 3**
 
 任何接手的 AI Agent：**先读 `AGENTS.md`（工程契约），再读本文件（现状），最后读 `docs/02-roadmap.md` 领工单。** 不要跳过前三者直接改代码。
 
@@ -8,7 +8,7 @@
 
 ## 1. 一句话现状
 
-**两个来源、两端都通**：`memoryhub scan` 从 WorkBuddy 用户记忆与 Claude Code 的 `CLAUDE.md` 链 / auto memory 读入 `inbox/pending`，人工 `approve` 后进 `vault/`；`memoryhub mcp` 起只读 MCP server，任意 MCP 客户端可搜到这些记忆并看到来源与有效期。**79 个单元测试全绿**。**Codex 适配器、监控、索引、AI 整理、备份都还没有。**
+**三个来源（WorkBuddy / Claude Code / Codex）→ 审核 → vault → CLI / MCP 检索，全链路已通。** `scan`/`watch` 采集进 `inbox/pending`，`diff`/`approve` 审核入库，`search` 走 SQLite FTS5 索引，`mcp` 提供 5 个工具并按 `--permission` 分级，`backup` 带敏感闸门。**160 个单元测试**（本机缺 `mcp` SDK 时 `test_mcp` 无法导入，属可选依赖缺失，不是回归）。**未做：阶段 3 AI 整理（语义去重/冲突检测）、阶段 6 打包与 Web UI、P2-03b、Codex 记忆层。**
 
 ## 2. 仓库信息
 
@@ -17,9 +17,20 @@
 | 本地路径 | `D:/project/MemoryHub` |
 | 远端 | `origin → https://github.com/iCurrer/MemoryHub.git`（**公开仓**） |
 | 分支 | `main` |
-| 提交 | 骨架 2 + 加固 1 + 上游基线 1 + P2-01 1 + 采集 1 + MCP 1 |
-| 数据目录 | `D:/my-memory`（**尚未创建**，需 `memoryhub init` 生成） |
+| 提交 | 29（2026-11-25 曾对全部历史做一次提交信息改写，清除泄露的身份信息） |
+| 数据目录 | `D:/my-memory`（已创建，42 条记忆，**自身独立 git 仓、无远端**） |
 | 运行时依赖 | **`pyyaml>=6.0`、`mcp>=2.0,<3`**（后者连带 pydantic/starlette/uvicorn 等，见 ADR-012） |
+
+### 2.1 三层边界（ADR-013，别搞混）
+
+| 层 | 路径 | 远端 | 守住它的东西 |
+|---|---|---|---|
+| 代码仓 | `D:/project/MemoryHub` | `origin` → GitHub 公开仓 | `tools/hooks/pre-commit`（暂存内容）+ `commit-msg`（提交信息） |
+| 记忆仓工作副本 | `D:/my-memory` | 无 | `boundary.violations()`：位于任何 git 工作树内即拒绝 `init` |
+| 记忆仓远端 | 用户自选（建议私有 + 加密） | 由用户决定 | `init` 写入的 `pre-push` 钩子：URL 含 memoryhub 即拒推 |
+
+**云端只有代码仓。** 用户记忆永不进它，也不进它的历史。clone 后先跑 `sh tools/setup_dev.sh`，否则钩子不生效（未启用时 `python tools/lint_staged.py --all` 仍可手动扫）。
+
 
 ## 3. 已实现（可依赖）
 
@@ -35,25 +46,29 @@
 | `src/memoryhub/backup/history.py` | 从 vault 的 git log 读变更摘要（`log`） | 稳定（P4-03） |
 | `src/memoryhub/storage/index.py` | SQLite FTS5 索引：trigram、mtime 新鲜度、可重建 | 稳定（P2-02） |
 | `src/memoryhub/watcher/` | 轮询 + 防抖 + 哈希去重（`MtimeTracker`→`Debouncer`→`HashTracker`） | 稳定（P2-06） |
-| `src/memoryhub/mcp/server.py` | 只读 MCP 三件套 + 可见性规则（ADR-012） | 稳定（P5-01 3/5） |
+| `src/memoryhub/mcp/server.py` | MCP 5 工具 + 可见性规则 + read/propose/admin 权限分级（ADR-012） | 稳定（P5-01、P5-02） |
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
 | `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析 | 稳定（注意：`save()` 会整份重写，加配置项前先改成合并写入） |
-| `src/memoryhub/cli.py` | 19 个命令 | 稳定，命令会继续增加 |
-| `tests/test_store.py` | 30 个用例 | 会随功能增长 |
-| `tests/test_cli.py` | 19 个端到端用例 | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
-| `tests/test_adapters.py` | 27 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude 适配器 |
-| `tests/test_mcp.py` | 9 个用例 | 可见性规则 + 真实 stdio 握手（含 stdout 纯净性断言） |
+| `src/memoryhub/boundary.py` | 两仓隔离：`violations()`、远端检查、`pre-push` 钩子安装 | 稳定（ADR-013） |
+| `tools/lint_staged.py` | 暂存内容 + 提交信息的路径/PII 扫描；`--all` 全量、`--message-only` | 稳定（ADR-013） |
+| `tools/hooks/` + `tools/setup_dev.sh` | `core.hooksPath` 钩子，clone 后跑一次 | 稳定；新增规则改 `RULES` 与 `pii-allowlist.txt` |
+| `src/memoryhub/cli.py` | 18 个命令 | 稳定，命令会继续增加 |
+| `tests/test_store.py` | 37 个用例 | 会随功能增长 |
+| `tests/test_cli.py` | 32 个端到端用例（含审核流） | 覆盖 `--vault` 三写法、`--approve` 分级、`scan` 幂等、错误路径 |
+| `tests/test_adapters.py` | 33 个用例 | 协议三条判据 + WorkBuddy（含人格目录）+ Claude + Codex 适配器 |
+| `tests/test_mcp.py` | 19 个用例 | 可见性规则 + 真实 stdio 握手（含 stdout 纯净性断言） |
 | `tests/test_watcher.py` | 11 个用例 | 防抖/哈希/排除 + 注入时钟 |
 | `tests/test_index.py` | 9 个用例 | 中文、删库重建一致、外部编辑、兜底 |
 | `tests/test_history.py` | 8 个用例 | 真实 git 仓：新增/修改/删除、`--since` 翻译、非仓与空仓 |
-| `tests/test_cli.py` 审核流部分 | 8 个用例 | diff 自动配对 / 批量 approve / blocked 跳过 |
+| `tests/test_backup.py` | 8 个用例 | 本地提交 / 远端推送敏感闸门 / .gitignore |
+| `tests/test_safety.py` | 6 个用例 | 凭证与 PII 分级 |
 
-可用命令：`init` `doctor` `new` `scan` `mcp` `list` `show` `search` `approve` `reject` `stats`
+可用命令：`init` `doctor` `new` `scan` `watch` `index` `audit` `diff` `log` `mcp` `list` `show` `search` `approve` `reject` `sensitivity` `backup` `stats`
 
 本轮新增的行为（都带测试）：
 
 - **`scan`**：从已注册的 adapter 采集到 `inbox/pending`，按 `(adapter, source_path, body)` 指纹去重，可 `--dry-run`；adapter 恒为只读
-- **`mcp`**：stdio MCP server，4 个工具；`search`/`list` 只暴露 `approved` 且未过期，`get` 可查任意状态并标注，`propose` 只能产生 `pending`（命中密钥形状即 `blocked`）
+- **`mcp`**：stdio MCP server，5 个工具（`memory_status` 仅 admin）；`search`/`list` 只暴露 `approved` 且未过期，`get` 可查任意状态并标注，`propose` 只能产生 `pending`（命中密钥形状即 `blocked`）
 - `new` 走 `store.create()`：id 被占用时**报错而不是覆盖**
 - `new --approve` 遇到 `trust=review` 会拒绝，需 `--force` 才越过；`blocked` 无论如何不可越过
 - `list` / `search` 默认隐藏 `valid_until` 已过期的条目，`--include-expired` 打开；
@@ -66,7 +81,7 @@
 
 ```bash
 cd /d/project/MemoryHub
-pip install pyyaml          # 唯一的运行时依赖
+pip install pyyaml mcp      # 运行时依赖
 export PYTHONPATH=src
 
 python -m unittest discover -s tests -v          # 期望 163 passed
@@ -119,7 +134,7 @@ Claude Desktop 放在 `%APPDATA%\Claude\claude_desktop_config.json`；Cursor 放
 | 5 | `config.save()` 整份重写配置 | 阶段 3 加 `ai.*` 后，`init` 会把它们抹掉 | 阶段 3 前改成合并 |
 | 6 | `supersedes` 不做引用存在性校验，可悬空 | 取代链是核心资产，却没有完整性检查 | 阶段 3 冲突检测时补 |
 | 7 | `status` 字段与文件位置是两个真相源 | 手改 `status` 不会移动文件。保存过期快照曾把已批准条目搬回 inbox（P4-03 写测试时实测到）。**已加乐观并发校验**：`_base_updated_at` 与磁盘不一致时抛 `StaleEntryError`。剩余局限：时间戳是秒级，同一秒内的并发写入检测不到 | 已修复主路径；如需同秒保护，把 `now_iso` 改成微秒 |
-| 8 | `AGENTS.md`「测试必须能在无第三方包的机器上跑通」已不成立 | 新增了 `pyyaml` 依赖，新人按契约描述会以为不用装 | **待所有者改措辞**，见 ADR-005 |
+| 8 | `AGENTS.md`「测试必须能在无第三方包的机器上跑通」已不成立 | 新增了 `pyyaml` 依赖，新人按契约描述会以为不用装 | **已解决**（2026-11-25，AGENTS.md 已改为"需 pyyaml + mcp，无需网络"） |
 
 （已清：frontmatter 读不出块列表 —— P2-01 解决，见 ADR-005。）
 
@@ -137,18 +152,15 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 
 ## 8. 下一步
 
-**出口已开，现在缺的是"进得来更多"。** 目前只有一个来源（WorkBuddy），库里条目少，MCP 再准也没多少可查。按价值排序：
+采集、审核、检索、备份已闭环；缺的是**整理能力**。按顺序：
 
-1. **P2-05 Claude Code 适配器** —— 纯 Markdown，`~/.claude/projects/<project>/memory/` 里每个记忆文件已带 `type`（user/feedback/project/reference）与 `modified`，可直接映射到 `category` / `updated_at`（见 `docs/04-upstream-formats.md` §3.3）。**字段同构，是投入产出比最高的下一个。**
-2. **P2-04 Codex 适配器** —— 价值在于"跨工具公共格式"（`AGENTS.md`），但要处理覆盖链、32 KiB 截断、以及记忆层在 sqlite/zstd 里（需单独立工单）。
-3. **P5-02 权限分级 + `memory_propose`** —— 有了它，AI 才能"把学到的写回来提案"，但仍不越过审核。
-4. **P2-02 索引** —— 数据量还小，随时可做但不紧急。
+1. **先还技术债 #5**：`config.save()` 改为合并写入（否则阶段 3 的 `ai.*` 配置会被 `init` 抹掉）。
+2. **P3-01 Provider 抽象**：OpenAI 兼容 / 自定义 Base URL，未配置时整体跳过，无 API 全功能回归测试。
+3. **P3-02 → P3-05**：Pydantic 校验 → 分类摘要 → 语义去重 → 冲突检测；产出恒为 `pending` 提案。
+4. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）。
+5. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、已知问题 #1 路径脱敏。
 
-**待所有者执行的 AGENTS 修改**（我不能代改契约文件）：
-1. 「已定决策」第 6 条需加限定："Markdown 是唯一真相源**仅指输出侧（vault）**，输入侧允许 md / jsonl / zstd-jsonl / sqlite"（ADR-011 第 3 条）。
-2. 「目录职责」应补 `adapters/` 与 `mcp/`。
-3. `tests/` 那条"必须能在无第三方包的机器上跑通"对阶段 2 已不成立（现有 `pyyaml` + `mcp`）。
-4. 「当前阶段」段落仍写着"阶段 2 及以后尚未实现"，实际已完成 P2-01 / P2-03 / P2-03a / P5-01(3/5)。
+**AGENTS 契约已同步**（2026-11-25，经所有者批准）：当前阶段、决策 6 限定输出侧、决策 7 依赖从严、目录职责、测试依赖说明。
 
 ## 9. 给接手者的提醒
 
@@ -156,5 +168,5 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 - 每次改动跑完两条验收命令再提交，不要攒大批量改动。
 - 策划书（`docs/reference/`）是历史输入，不是需求来源。有疑问查 `docs/03-plan-review.md` 的对照表。
 - CLI 测试用 `MEMORYHUB_HOME` 隔离配置目录，别让它读到真实 `~/.memoryhub`。
-- 测试需要 `pyyaml`。`AGENTS.md` 里"无第三方包也能跑通"这句话对阶段 2 已不成立，见 ADR-005 与已知问题 #8。
+- 测试需要 `pyyaml` + `mcp`（AGENTS.md 已同步）。
 - **"Claude" 是两个产品**：Desktop（应用，`%LOCALAPPDATA%\Claude-Data`）与 Code（CLI，`~/.claude`）。本机只装了 Desktop。查上游来源时**不要只看一个路径就下结论** —— 我犯过这个错，见 `docs/04-upstream-formats.md` §3.0。

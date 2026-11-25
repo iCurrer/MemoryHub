@@ -58,7 +58,7 @@ _PII_STRONG: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
                                r"(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b")),
     ("phone number", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")),
     ("bank card", re.compile(r"(?<!\d)(?:\d{4}[ -]?){3}\d{4,7}(?!\d)")),
-    # "北京市示例区示例路 390 号" and "示例区示例路 390 号" must both match:
+    # "示例市示例区示例路 1 号" and "示例市示例区示例路 1 号" must both match:  # pii:synthetic
     # the province/city prefix is optional, and a space before the number is normal.
     ("full address", re.compile(
         r"[\u4e00-\u9fa5]{2,}(?:省|市)?[\u4e00-\u9fa5]{0,10}(?:区|县)"

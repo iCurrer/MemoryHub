@@ -13,7 +13,7 @@ from memoryhub.safety import classify, findings, looks_sensitive  # noqa: E402
 
 class SecretTests(unittest.TestCase):
     def test_credentials_are_secret_and_win_over_everything(self) -> None:
-        level, labels = classify("address 示例区示例路 390 号 and key sk-abcdefghijklmnopqrstuvwx123456")
+        level, labels = classify("address 示例市示例区示例路 1 号 and key sk-abcdefghijklmnopqrstuvwx123456")  # pii:synthetic
         self.assertEqual(level, "secret")
         self.assertIn("openai-style key", labels)
 
@@ -32,8 +32,8 @@ class PiiTests(unittest.TestCase):
 
     def test_full_address_is_sensitive_in_both_shapes(self) -> None:
         for text in (
-            "住示例区示例路 390 号",
-            "北京市示例区示例路 390 号",
+            "住示例市示例区示例路 1 号",  # pii:synthetic
+            "示例市示例区示例路 1 号",  # pii:synthetic
         ):
             self.assertEqual(classify(text)[0], "sensitive", text)
 
