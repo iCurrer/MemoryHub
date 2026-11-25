@@ -1,7 +1,7 @@
 """AI-assisted organisation (phase 3, P3-01/P3-02/P3-03).
 
 Why this package exists at all: the rule-based splitter and classifier measured
-52.8% on the real vault (``docs/04-classify-audit.md``). Splitting a memory into
+54.7% on the real vault, 7.7% whenever no keyword fired (``docs/04-classify-audit.md``). Splitting a memory into
 one-fact-per-entry and naming that fact are semantic jobs; regex cannot do them.
 
 Where the boundary sits (this is the design, not an implementation detail):

@@ -14,7 +14,9 @@
 
 **审核怎么工作（ADR-017）**：`review` 一屏一条，按键 `a` 批 / `r` 拒 / `c` 改分类 / `s` 跳过 / `q` 退出。**队列每次从 vault 重新推导，只有"跳过的 id"被记住**（存 `~/.memoryhub/review.json`，不在 vault 内）。非 TTY 一律拒绝并指向 `approve <id>`。
 
-**当前最大断点（2026-11-25）**：`D:/my-memory` 里 53 条全是 `pending`，`approved` 为 0。MCP 的可见性规则（ADR-012）只返回 `approved`，所以**别的 AI 现在查不到任何东西**。工具已经就位（`python -m memoryhub review --vault D:/my-memory`），剩下的纯粹是需要人坐下来把 53 条审完——这一步没有任何代码能替代。
+**审核状态（2026-11-25 已解）**：53 条 pending 已批量审完 —— **50 approved / 2 rejected / 1 留 pending**。MCP 可见性（ADR-012 只返回 approved）实测 50 条：`memory_list` 50，中文双字检索可用（论文 4 / 记忆 7 / 考公 2），英文 `WORLD_001` 1，不存在的词返回 0。**别的 AI 现在能查到东西了。**
+
+两处保留不是漏审：`e1d1da5c` 是 Claude Code 默认提示的残片（不是记忆）、`4f686a73` 是无主语的孤儿状态行（切分产物），两条已 `rejected` 保留可追溯；`d0f97a9f` 是门牌级住址（`sensitivity=sensitive`，`trust=blocked`），**批准被存储层硬拦**，需人决定「降敏感度后批准 / 拒绝 / 就留在 pending」。批量执行的 22 处分类修正来自 `docs/audits/classify-labels-2026-11-25.tsv` 的人工标注。
 
 ## 2. 仓库信息
 
@@ -56,7 +58,7 @@
 | `src/memoryhub/storage/markdown_store.py` | 唯一写入入口：原子写、文件锁、`create()`/`save()`、扫描、检索、状态流转、取代链 | 稳定 |
 | `src/memoryhub/config.py` | TOML 配置、vault 路径三级解析、`save()` 支持嵌套表与读-合并-写 | 稳定（2026-11-25 已改为合并写入） |
 | `src/memoryhub/boundary.py` | 两仓隔离：`violations()`、远端检查、`pre-push` 钩子安装 | 稳定（ADR-013） |
-| `src/memoryhub/classify.py` | 加权规则分类（决定性权重 3），实测 52.8%，**仅作离线兜底**（ADR-015） | 降级：AI 模式下不参与 |
+| `src/memoryhub/classify.py` | 加权规则分类（决定性权重 3），实测 54.7%、无信号 7.7%，**仅作离线兜底**（ADR-015） | 降级：AI 模式下不参与 |
 | `src/memoryhub/ai/provider.py` | OpenAI 兼容 `chat/completions`，标准库 `urllib`，key 只读环境变量 | 稳定（ADR-016） |
 | `src/memoryhub/ai/schema.py` | 手写结构化校验：逐条丢弃、`quote` 必填、`body` 上限 1200 字 | 稳定，**不要换成 Pydantic**（ADR-005） |
 | `src/memoryhub/ai/organize.py` | 提示词 + 分批（24k 字）+ `quote` 定位校验 + 转 `pending` 条目 | 稳定；提示词是规格，改前先读文件头注释 |
@@ -175,11 +177,11 @@ ADR-011 已采纳（`source_kind` 扩展、`precedence`/`layer` 字段、"Markdo
 
 ## 8. 下一步
 
-采集、整理（单向）、审核、检索、备份已闭环。**当前断点是「0 条 approved」，工具已就位，缺的是人坐下来审**。按优先级：
+采集、整理（单向）、审核、检索、备份已闭环，**且已有 50 条 approved 实际可查**。按优先级：
 
-1. **把 53 条审完**：`python -m memoryhub review --vault D:/my-memory`。这不是工单，是使用——但只有它能让 §1 的断点消失。
-2. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。**唯一一项还没拍板就能做的。**
-3. **P3-04 → P3-05 语义去重与冲突检测**：审计数据证明这两项对 AI 的依赖度最高（改错分类 1 秒，判断"是否同一件事"要 1 分钟）。
+1. **P3-00 fallback 显式化**：`classify` 无信号时返回 `unknown` 而不是静默 `default`。改动小、不依赖 AI、直接消掉 22.6% 的静默误判（ADR-015）。**唯一一项还没拍板就能做的。**
+2. **那条 blocked 的住址**：`sensitivity` 是"要不要让别的 AI 读到门牌号"的问题，不是分类问题。需所有者拍板（见 §1）。
+3. **P3-04 → P3-05 语义去重与冲突检测**：审计数据证明这两项对 AI 的依赖度最高（改错分类 1 秒，判断"是否同一件事"要 1 分钟）。50 条 now approved，去重才有真实素材。
 4. **P3-03 余下部分**：摘要字段（拆分与分类已通）。
 5. 可并行的小单：P2-03b WorkBuddy 工作区记忆；Codex 记忆层（sqlite + jsonl，需单独立工单）；阶段 6 打包与 Web UI。
 6. 待拍板：LICENSE、ADR-010（`project` 分类信任级）、ADR-015 的三项变更（第 2 项以外）、已知问题 #1 路径脱敏。

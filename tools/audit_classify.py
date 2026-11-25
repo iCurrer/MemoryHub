@@ -39,6 +39,13 @@ from memoryhub.models import CATEGORIES, MemoryEntry  # noqa: E402
 FALLBACK_REASONS = ("no rule matched", "body too short for rules")
 DEFAULT_LABELS = REPO / "docs" / "audits" / "classify-labels-2026-11-25.tsv"
 
+#: Mirrors ``classify()``'s signature default. Production's ``recategorize``
+#: deliberately passes ``entry.category`` instead (a re-run should not move an
+#: entry the rules have no opinion about), but an audit cannot do that: once the
+#: vault has been reviewed, ``entry.category`` *is* the human label, so the
+#: fallback would be graded against its own answer. Fixed constant or nothing.
+DEFAULT_CATEGORY = "profile"
+
 
 def load_labels(path: Path) -> Dict[str, Tuple[str, str]]:
     labels: Dict[str, Tuple[str, str]] = {}
@@ -102,7 +109,12 @@ def main() -> int:
         entry = entries.get(ident)
         if entry is None:
             continue
-        rule, reason = clf.classify(entry.body, default=entry.category)
+        # `default` must be the same constant production uses, NOT
+        # entry.category. The stored category is this very classifier's earlier
+        # output (or, after a review, the human label itself), so feeding it
+        # back makes the fallback "succeed" by construction -- the measurement
+        # would silently change every time the vault is reviewed.
+        rule, reason = clf.classify(entry.body, default=DEFAULT_CATEGORY)
         checked += 1
         confusion[human][rule] += 1
 
@@ -133,7 +145,8 @@ def main() -> int:
     # returns the caller's default, so it "wins" whenever the default happens to be
     # right. Splitting the two makes the classifier accountable for the part it
     # actually decided, and exposes whether ``default`` is a strategy or a coin flip.
-    scored = [(ident, human, clf.classify(entries[ident].body, default=entries[ident].category), kind)
+    scored = [
+        (ident, human, clf.classify(entries[ident].body, default=DEFAULT_CATEGORY), kind)
               for ident, (human, kind) in labels.items() if ident in entries]
     signalled = [row for row in scored if row[2][1] not in FALLBACK_REASONS]
     silent = [row for row in scored if row[2][1] in FALLBACK_REASONS]
